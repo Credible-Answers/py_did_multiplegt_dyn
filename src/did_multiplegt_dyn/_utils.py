@@ -31,8 +31,16 @@ def validate_inputs(
     ci_level: Union[int, float] = 95,
     save_results: Optional[str] = None,
     less_conservative_se: bool = False,
+    more_granular_demeaning: bool = False,
     dont_drop_larger_lower: bool = False,
     drop_if_d_miss_before_first_switch: bool = False,
+    bootstrap=None,
+    by_path=None,
+    design=None,
+    by: Optional[str] = None,
+    normalized_weights: bool = False,
+    predict_het_hc2bm: bool = False,
+    date_first_switch=None,
 ) -> Dict[str, Any]:
     """
     Validate constructor arguments for the DID class.
@@ -79,6 +87,7 @@ def validate_inputs(
 
     cluster = _check_optional_str_col(cluster, "cluster")
     weight = _check_optional_str_col(weight, "weight")
+    by = _check_optional_str_col(by, "by")
 
     # 3. effects and placebo must be numbers
     if not isinstance(effects, (int, float)):
@@ -95,8 +104,11 @@ def validate_inputs(
         "same_switchers_pl": same_switchers_pl,
         "only_never_switchers": only_never_switchers,
         "less_conservative_se": less_conservative_se,
+        "more_granular_demeaning": more_granular_demeaning,
         "dont_drop_larger_lower": dont_drop_larger_lower,
         "drop_if_d_miss_before_first_switch": drop_if_d_miss_before_first_switch,
+        "normalized_weights": normalized_weights,
+        "predict_het_hc2bm": predict_het_hc2bm,
     }
     for name, value in bool_params.items():
         if not isinstance(value, bool):
@@ -143,6 +155,21 @@ def validate_inputs(
     # we leave `continuous` and `predict_het` largely unchecked on purpose,
     # since you did not specify constraints for them.
 
+    # Validate bootstrap/continuous combination
+    if bootstrap is not None and continuous == 0:
+        warnings.warn(
+            "You specified the bootstrap option without the continuous option. "
+            "Bootstrap is typically used with continuous treatments for valid inference.",
+            UserWarning
+        )
+
+    # Validate by/by_path mutual exclusivity
+    if by is not None and by_path is not None:
+        raise ValueError(
+            "Cannot specify both 'by' and 'by_path' options. "
+            "Use 'by' to stratify by a grouping variable, or 'by_path' to stratify by treatment paths."
+        )
+
     # ---- Build validated dict to return ----
     validated: Dict[str, Any] = dict(
         df=df,
@@ -168,8 +195,16 @@ def validate_inputs(
         ci_level=ci_level,
         save_results=save_results,
         less_conservative_se=less_conservative_se,
+        more_granular_demeaning=more_granular_demeaning,
         dont_drop_larger_lower=dont_drop_larger_lower,
         drop_if_d_miss_before_first_switch=drop_if_d_miss_before_first_switch,
+        bootstrap=bootstrap,
+        by_path=by_path,
+        design=design,
+        by=by,
+        normalized_weights=normalized_weights,
+        predict_het_hc2bm=predict_het_hc2bm,
+        date_first_switch=date_first_switch,
     )
 
     # # ---- User-facing summary printout ----
