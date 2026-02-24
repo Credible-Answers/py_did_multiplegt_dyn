@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import polars as pl
 import numpy as np
 import math
@@ -12,6 +14,8 @@ from statsmodels.stats.sandwich_covariance import cov_hc0, cov_hc1
 import pandas as pd
 from .did_multiplegt_dyn_core import did_multiplegt_dyn_core_pl
 from ._utils import *
+from ._date_first_switch import run_date_first_switch
+from ._normalized_weights import print_normalized_weights
 # Equivalent of R's MASS::ginv (generalized inverse)
 
 def did_multiplegt_main(
@@ -38,8 +42,16 @@ def did_multiplegt_main(
         ci_level=95,
         save_results=None,
         less_conservative_se=False,
+        more_granular_demeaning=False,
         dont_drop_larger_lower=False,
-        drop_if_d_miss_before_first_switch=False
+        drop_if_d_miss_before_first_switch=False,
+        bootstrap=None,
+        by_path=None,
+        design=None,
+        by=None,
+        normalized_weights=False,
+        predict_het_hc2bm=False,
+        date_first_switch=None
 ):
 
     import polars as pl
@@ -106,6 +118,386 @@ def did_multiplegt_main(
     if continuous > 0:
         degree_pol = continuous
 
+    # Bootstrap validation warnings
+    if bootstrap is not None and continuous == 0:
+        warnings.warn(
+            "You specified the bootstrap option without the continuous option. "
+            "We strongly recommend computing bootstrapped standard errors "
+            "only when using the continuous option, as analytical SEs can be "
+            "liberal in that case.",
+            UserWarning
+        )
+    if bootstrap is None and continuous > 0:
+        warnings.warn(
+            "You specified the continuous option without the bootstrap option. "
+            "We recommend computing bootstrapped standard errors when using "
+            "the continuous option as analytical SEs can be liberal in that case.",
+            UserWarning
+        )
+
+    # =========================================================================
+    # BY OPTION: Run estimation separately for each unique value of by variable
+    # =========================================================================
+    if by is not None:
+        # Get unique values of the by variable
+        by_values = df.select(by).unique().sort(by).to_series().to_list()
+
+        # Store results for each subgroup
+        all_by_results = []
+
+        for by_val in by_values:
+            # Subset data for this value
+            df_subset = df.filter(pl.col(by) == by_val)
+
+            # Recursively call without the by option
+            subset_result = did_multiplegt_main(
+                df=df_subset,
+                outcome=outcome,
+                group=group,
+                time=time,
+                treatment=treatment,
+                cluster=cluster,
+                effects=effects,
+                placebo=placebo,
+                normalized=normalized,
+                effects_equal=effects_equal,
+                controls=controls,
+                trends_nonparam=trends_nonparam,
+                trends_lin=trends_lin,
+                continuous=continuous,
+                weight=weight,
+                predict_het=predict_het,
+                same_switchers=same_switchers,
+                same_switchers_pl=same_switchers_pl,
+                switchers=switchers,
+                only_never_switchers=only_never_switchers,
+                ci_level=ci_level,
+                save_results=None,  # Don't save individual results
+                less_conservative_se=less_conservative_se,
+                dont_drop_larger_lower=dont_drop_larger_lower,
+                drop_if_d_miss_before_first_switch=drop_if_d_miss_before_first_switch,
+                bootstrap=bootstrap,
+                by_path=None,  # Don't nest by_path in by
+                design=None,  # Don't show design for each subset
+                by=None  # No nested by
+            )
+
+            # Add by_results metadata to indicate which subgroup this is
+            if 'did_multiplegt_dyn' in subset_result:
+                subset_result['did_multiplegt_dyn']['by_results'] = {
+                    'by_var': by,
+                    'by_value': by_val
+                }
+
+            all_by_results.append({
+                'by_var': by,
+                'by_value': by_val,
+                'result': subset_result
+            })
+
+        # Return combined results
+        # Use the first subgroup's result as base but include all by_results
+        combined_result = all_by_results[0]['result'] if all_by_results else {'did_multiplegt_dyn': {}}
+        combined_result['did_multiplegt_dyn']['all_by_results'] = all_by_results
+
+        return combined_result
+
+    # =========================================================================
+    # BY_PATH OPTION: Run estimation separately for each treatment path
+    # =========================================================================
+    if by_path is not None:
+        from ._by_path import (
+            validate_by_path_input,
+            rank_paths_by_frequency,
+            get_control_subset_for_path,
+            format_path_for_display
+        )
+
+        # Validate input
+        n_paths_requested = validate_by_path_input(by_path)
+
+        # We need to prepare the data first to identify paths
+        # Subset columns but do NOT rename originals yet
+        temp_original_names = [outcome, group, time, treatment]
+        if trends_nonparam:
+            temp_original_names += trends_nonparam
+        if weight:
+            temp_original_names.append(weight)
+        if controls:
+            temp_original_names += controls
+        if (cluster) and (cluster != group):
+            temp_original_names.append(cluster)
+        temp_original_names = list(dict.fromkeys(temp_original_names))
+        df_temp = df.select(temp_original_names)
+
+        # Standardize names for path identification
+        df_temp = df_temp.rename({
+            outcome: "outcome_XX",
+            group: "group_XX",
+            time: "time_XX",
+            treatment: "treatment_XX",
+        })
+
+        # Sort data
+        df_temp = df_temp.sort(["group_XX", "time_XX"])
+
+        # Create T_g (last time per group)
+        df_temp = df_temp.with_columns([
+            pl.col("time_XX").max().over("group_XX").alias("T_g_XX")
+        ])
+
+        # Detect treatment changes to find F_g
+        df_temp = df_temp.with_columns([
+            pl.col("treatment_XX").shift(1).over("group_XX").alias("treatment_lag")
+        ])
+        df_temp = df_temp.with_columns([
+            ((pl.col("treatment_XX") != pl.col("treatment_lag")) &
+             pl.col("treatment_lag").is_not_null()).alias("treatment_changed")
+        ])
+        df_temp = df_temp.with_columns([
+            pl.when(pl.col("treatment_changed"))
+            .then(pl.col("time_XX"))
+            .otherwise(None)
+            .alias("switch_time")
+        ])
+        df_temp = df_temp.with_columns([
+            pl.col("switch_time").min().over("group_XX").alias("F_g_XX")
+        ])
+
+        # Fill F_g with T_g+1 for never-switchers
+        df_temp = df_temp.with_columns([
+            pl.when(pl.col("F_g_XX").is_null())
+            .then(pl.col("T_g_XX") + 1)
+            .otherwise(pl.col("F_g_XX"))
+            .alias("F_g_XX")
+        ])
+
+        # Create first_obs_by_gp_XX
+        df_temp = df_temp.with_columns([
+            (pl.col("time_XX").cum_count().over("group_XX") == 1).alias("first_obs_by_gp_XX")
+        ])
+
+        # Create d_sq_XX (baseline treatment before switch)
+        df_temp = df_temp.with_columns([
+            pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1)
+            .then(pl.col("treatment_XX"))
+            .otherwise(None)
+            .alias("d_sq_temp")
+        ])
+        df_temp = df_temp.with_columns([
+            pl.col("d_sq_temp").max().over("group_XX").alias("d_sq_XX")
+        ])
+
+        # Create dummy columns for treatment at each relative time period
+        # k=0: baseline (F_g - 1), k=1: F_g, k=2: F_g+1, ..., k=l: F_g-1+l
+        dummy_cols = [f"dummy_treat_{k}" for k in range(effects + 1)]
+
+        for k in range(effects + 1):
+            target_time_col = f"target_time_{k}"
+            # Target time for this k: F_g - 1 + k
+            df_temp = df_temp.with_columns([
+                (pl.col("F_g_XX") - 1 + k).alias(target_time_col)
+            ])
+            # Extract treatment at target time
+            df_temp = df_temp.with_columns([
+                pl.when(pl.col("time_XX") == pl.col(target_time_col))
+                .then(pl.col("treatment_XX"))
+                .otherwise(None)
+                .alias(f"treat_at_{k}_temp")
+            ])
+            # Propagate to all observations in the group
+            df_temp = df_temp.with_columns([
+                pl.col(f"treat_at_{k}_temp").drop_nulls().first().over("group_XX").alias(dummy_cols[k])
+            ])
+            df_temp = df_temp.drop([target_time_col, f"treat_at_{k}_temp"])
+
+        # Create path string from treatment sequence (integers for cleaner display)
+        # NA values indicate periods where data is not available
+        df_temp = df_temp.with_columns([
+            pl.concat_str(
+                [pl.col(c).cast(pl.Int64).cast(pl.Utf8).fill_null("NA") for c in dummy_cols],
+                separator=", "
+            ).alias("path_str_XX")
+        ])
+
+        # Only switchers have valid paths (F_g <= T_g)
+        # Include paths even if some periods have NA (incomplete paths)
+        df_temp = df_temp.with_columns([
+            pl.when(pl.col("F_g_XX") <= pl.col("T_g_XX"))
+            .then(pl.col("path_str_XX"))
+            .otherwise(None)
+            .alias("path_str_XX")
+        ])
+
+        # Calculate how many complete effect periods each group has
+        # This is T_g - F_g + 1 (number of periods from F_g to T_g inclusive)
+        df_temp = df_temp.with_columns([
+            (pl.col("T_g_XX") - pl.col("F_g_XX") + 1).alias("max_effects_available_XX")
+        ])
+
+        # Create numeric path identifier
+        switcher_paths = df_temp.filter(
+            pl.col("path_str_XX").is_not_null()
+        ).select("path_str_XX").unique()
+
+        if switcher_paths.height == 0:
+            warnings.warn("No treatment paths found in data", UserWarning)
+            # Fall through to regular estimation
+        else:
+            path_mapping = switcher_paths.with_row_index("path_id_temp")
+            df_temp = df_temp.join(path_mapping, on="path_str_XX", how="left")
+            df_temp = df_temp.with_columns([
+                (pl.col("path_id_temp") + 1).alias("different_paths_XX")
+            ])
+            df_temp = df_temp.drop("path_id_temp")
+
+            # Rank paths by frequency
+            df_temp = rank_paths_by_frequency(df_temp)
+
+            # Count total paths
+            n_total_paths = df_temp.select(
+                pl.col("different_paths_XX").drop_nulls().n_unique()
+            ).item()
+
+            # Determine number of paths to analyze
+            if n_paths_requested == -1:  # "all"
+                n_paths = int(n_total_paths)
+            else:
+                n_paths = min(n_paths_requested, int(n_total_paths))
+                if n_paths_requested > n_total_paths:
+                    warnings.warn(
+                        f"Requested {n_paths_requested} paths but only {n_total_paths} exist. "
+                        f"Analyzing all {n_total_paths} paths.",
+                        UserWarning
+                    )
+
+            # Store results for each path
+            all_path_results = []
+
+            for k in range(1, n_paths + 1):
+                # Get path info - extract treatment sequence from path_str
+                path_row = df_temp.filter(
+                    pl.col("different_paths_XX") == k
+                ).select(["path_str_XX", "max_effects_available_XX"]).unique()
+
+                if path_row.height == 0:
+                    continue
+
+                path_str = path_row["path_str_XX"][0]
+                # Parse the path string back to a list
+                treatment_sequence = [int(x) if x != "NA" else None for x in path_str.split(", ")]
+
+                # Count groups in this path
+                n_groups = df_temp.filter(
+                    (pl.col("different_paths_XX") == k) & pl.col("first_obs_by_gp_XX")
+                ).height
+
+                # Determine maximum effects that can be estimated for this path
+                # Based on the minimum data span among groups in this path
+                path_max_effects = df_temp.filter(
+                    (pl.col("different_paths_XX") == k) & pl.col("first_obs_by_gp_XX")
+                ).select("max_effects_available_XX").min().item()
+
+                # Adjust effects for this path
+                path_effects = min(effects, int(path_max_effects)) if path_max_effects else effects
+
+                # Calculate max placebos: need data before F_g-1
+                # For placebos, we need observations at F_g-1-p for p=1,2,...
+                # Max placebos = max over groups of (F_g - 1 - first_time_in_group)
+                # Use max() because Stata estimates placebos for groups that have data,
+                # even if some groups don't (those just won't contribute to the estimation)
+                path_groups_data = df_temp.filter(
+                    pl.col("different_paths_XX") == k
+                ).group_by("group_XX").agg([
+                    pl.col("F_g_XX").first().alias("F_g"),
+                    pl.col("time_XX").min().alias("min_time")
+                ])
+                if path_groups_data.height > 0:
+                    path_groups_data = path_groups_data.with_columns([
+                        (pl.col("F_g") - 1 - pl.col("min_time")).alias("placebos_available")
+                    ])
+                    path_max_placebos = int(path_groups_data["placebos_available"].max())
+                    path_max_placebos = max(0, path_max_placebos)  # Ensure non-negative
+                else:
+                    path_max_placebos = 0
+                path_placebos = min(placebo, path_max_placebos)
+
+                # Show warnings if effects or placebos were reduced
+                if path_effects < effects:
+                    print(f"Path ({', '.join(str(x) if x is not None else 'NA' for x in treatment_sequence)}): "
+                          f"The number of effects which can be estimated is at most {path_effects}. "
+                          f"The command will therefore try to estimate {path_effects} effect(s).")
+                if path_placebos < placebo:
+                    print(f"Path ({', '.join(str(x) if x is not None else 'NA' for x in treatment_sequence)}): "
+                          f"The number of placebos which can be estimated is at most {path_placebos}. "
+                          f"The command will therefore try to estimate {path_placebos} placebo(s).")
+
+                # Get filtered data for this path
+                df_path = get_control_subset_for_path(df_temp, k, path_effects)
+
+                # Map back to original column names for estimation
+                df_path = df_path.rename({
+                    "outcome_XX": outcome,
+                    "group_XX": group,
+                    "time_XX": time,
+                    "treatment_XX": treatment,
+                })
+
+                # Run estimation for this path with adjusted effects/placebos
+                try:
+                    path_result = did_multiplegt_main(
+                        df=df_path,
+                        outcome=outcome,
+                        group=group,
+                        time=time,
+                        treatment=treatment,
+                        cluster=cluster,
+                        effects=path_effects,
+                        placebo=path_placebos,
+                        normalized=normalized,
+                        effects_equal=effects_equal,
+                        controls=controls,
+                        trends_nonparam=trends_nonparam,
+                        trends_lin=trends_lin,
+                        continuous=continuous,
+                        weight=weight,
+                        predict_het=predict_het,
+                        same_switchers=True,  # Required for by_path
+                        same_switchers_pl=same_switchers_pl,
+                        switchers=switchers,
+                        only_never_switchers=only_never_switchers,
+                        ci_level=ci_level,
+                        save_results=None,
+                        less_conservative_se=less_conservative_se,
+                        dont_drop_larger_lower=dont_drop_larger_lower,
+                        drop_if_d_miss_before_first_switch=drop_if_d_miss_before_first_switch,
+                        bootstrap=bootstrap,
+                        by_path=None,  # No nested by_path
+                        design=None,
+                        by=None
+                    )
+
+                    all_path_results.append({
+                        'path_id': k,
+                        'treatment_sequence': treatment_sequence,
+                        'n_groups': n_groups,
+                        'result': path_result
+                    })
+                except Exception as e:
+                    warnings.warn(f"Estimation failed for path {k}: {str(e)}", UserWarning)
+                    all_path_results.append({
+                        'path_id': k,
+                        'treatment_sequence': treatment_sequence,
+                        'n_groups': n_groups,
+                        'result': {'did_multiplegt_dyn': {'Effects': None, 'ATE': None, 'Placebos': None}},
+                        'error': str(e)
+                    })
+
+            # Return combined results
+            combined_result = all_path_results[0]['result'] if all_path_results else {'did_multiplegt_dyn': {}}
+            combined_result['did_multiplegt_dyn']['all_path_results'] = all_path_results
+
+            return combined_result
 
     if trends_nonparam:
         original_names += trends_nonparam
@@ -116,7 +508,14 @@ def did_multiplegt_main(
     if (cluster) and (cluster != group):
         original_names.append(cluster)
     if predict_het:
-        original_names += list(predict_het[0])
+        # Handle both formats: ['var', 'all'] or [['var1', 'var2'], 'all']
+        het_vars = predict_het[0]
+        if isinstance(het_vars, str):
+            original_names.append(het_vars)
+        else:
+            original_names += list(het_vars)
+    if by:
+        original_names.append(by)
 
     # Polars doesn't need .copy(), and it doesn't like duplicate column names,
     # so we deduplicate while preserving order:
@@ -233,6 +632,9 @@ def did_multiplegt_main(
             )
         else:
             pred_het, het_effects = predict_het
+            # Handle both formats: 'var' or ['var1', 'var2']
+            if isinstance(pred_het, str):
+                pred_het = [pred_het]
             for v in pred_het:
                 # df['sd_het'] = df.groupby(group)[v].transform(lambda x: x.std(skipna=True))
                 df = df.with_columns(
@@ -524,11 +926,13 @@ def did_multiplegt_main(
     # Sort by group and time
     df = df.sort(["group_XX", "time_XX"])
 
-    # Carry forward: cummax within group
+    # Carry forward: cummax within group (cast to int for compatibility)
     df = df.with_columns(
         pl.col("ever_change_d_XX")
+        .cast(pl.Int8)
         .cum_max()
         .over("group_XX")
+        .cast(pl.Boolean)
         .alias("ever_change_d_XX")
     )
 
@@ -1901,10 +2305,8 @@ def did_multiplegt_main(
                 key_N1 = f"N1_{i}_XX"
                 if key_N1 in dict_glob:
                     N1_i = dict_glob.get(key_N1)
-                    # print(f"{N1_i} {key_N1}")
                 else:
-                    # print(f"Warning: {key_N1} not found in dict_glob keys.")
-                    N1_i = "hola"
+                    N1_i = 0
 
                 # ===== Copy columns (Polars way) =====
                 if N1_i != 0:
@@ -1934,7 +2336,7 @@ def did_multiplegt_main(
                     i = int(i)
 
                     if trends_lin:
-                        merged = const | controls_globals  # still Python dict logic
+                        merged = {**const, **controls_globals}  # Python 3.8 compatible
                         data = did_multiplegt_dyn_core_pl(
                             df,
                             outcome="outcome_XX",
@@ -2058,7 +2460,7 @@ def did_multiplegt_main(
                 i = int(i)
 
                 if trends_lin:
-                    merged = const | controls_globals
+                    merged = {**const, **controls_globals}
                     data = did_multiplegt_dyn_core_pl(
                         df,
                         outcome="outcome_XX",
@@ -2103,8 +2505,7 @@ def did_multiplegt_main(
                 if key_N0_i in dict_glob:
                     N0_i = dict_glob[key_N0_i]
                 else:
-                    print(f"Warning: {key_N0_i} not found in dict_glob keys.")
-                    N0_i = "hola"
+                    N0_i = 0
 
                 if N0_i != 0:
                     # create minus / var / count columns
@@ -2134,7 +2535,7 @@ def did_multiplegt_main(
                     i = int(i)
 
                     if trends_lin:
-                        merged = const | controls_globals
+                        merged = {**const, **controls_globals}
                         data = did_multiplegt_dyn_core_pl(
                             df,
                             outcome="outcome_XX",
@@ -2178,7 +2579,6 @@ def did_multiplegt_main(
                     if key_N0_pl in dict_glob:
                         N0_pl = dict_glob[key_N0_pl]
                     else:
-                        print(f"Warning: {key_N0_pl} not found in dict_glob keys.")
                         N0_pl = 0
 
                     if N0_pl != 0:
@@ -2315,7 +2715,10 @@ def did_multiplegt_main(
 
         # --- Missing check ---
         if dict_glob[f"N_switchers_effect_{i}_XX"] == 0 or dict_glob[f"N_effect_{i}_XX"] == 0:
-            print(f"Effect {i} cannot be estimated. No switcher or control for this effect.")
+            warnings.warn(
+                f"Effect {i} cannot be estimated. No switcher or control for this effect.",
+                UserWarning
+            )
 
         # --- DID computation ---
         df = df.with_columns(
@@ -2553,7 +2956,10 @@ def did_multiplegt_main(
 
             # Warn if no valid estimations
             if dict_glob[f"N_switchers_placebo_{i}_XX"] == 0 or dict_glob[f"N_placebo_{i}_XX"] == 0:
-                print(f"Placebo {i} cannot be estimated. No switcher or control for this placebo.")
+                warnings.warn(
+                    f"Placebo {i} cannot be estimated. No switcher or control for this placebo.",
+                    UserWarning
+                )
 
 
     # Patch significance level
@@ -3041,8 +3447,9 @@ def did_multiplegt_main(
 
         else:
             p_jointeffects = np.nan
-            print(
-                "Some effects could not be estimated. Therefore, the test of joint Noneity of the effects could not be computed."
+            warnings.warn(
+                "Some effects could not be estimated. Therefore, the test of joint nullity of the effects could not be computed.",
+                UserWarning
             )
 
 
@@ -3152,16 +3559,20 @@ def did_multiplegt_main(
             p_jointplacebo = 1 - chi2.cdf(didmgt_chi2placebo[0, 0], df=l_placebo_int)
         else:
             p_jointplacebo = np.nan
-            print(
-                "Some placebos could not be estimated. Therefore, the test of joint Noneity of the placebos could not be computed."
+            warnings.warn(
+                "Some placebos could not be estimated. Therefore, the test of joint nullity of the placebos could not be computed.",
+                UserWarning
             )
 
     het_res = pd.DataFrame()
 
     if predict_het is not None and len(predict_het_good) > 0:
         # Define which effects to calculate
-        if -1 in het_effects:
+        # Handle 'all', -1, or list of effect numbers
+        if het_effects == 'all' or het_effects == -1 or (isinstance(het_effects, (list, tuple)) and -1 in het_effects):
             het_effects = list(range(1, l_XX + 1))
+        elif isinstance(het_effects, (int, float)):
+            het_effects = [int(het_effects)]
         all_effects_XX = [i for i in range(1, l_XX + 1) if i in het_effects]
 
         if any(np.isnan(all_effects_XX)):
@@ -3169,60 +3580,119 @@ def did_multiplegt_main(
                 "Error in predict_het second argument: please specify only numbers ≤ number of effects requested"
             )
 
-        # Preliminaries: Yg, Fg-1
-        df["Yg_Fg_min1_XX"] = np.where(
-            df["time_XX"] == df["F_g_XX"] - 1, df["outcome_non_diff_XX"], np.nan
+        # Preliminaries: Yg, Fg-1 (using Polars syntax)
+        df = df.with_columns(
+            pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1)
+            .then(pl.col("outcome_non_diff_XX"))
+            .otherwise(None)
+            .alias("Yg_Fg_min1_XX_temp")
         )
-        df["Yg_Fg_min1_XX"] = df.groupby("group_XX")["Yg_Fg_min1_XX"].transform("mean")
-        df["feasible_het_XX"] = ~df["Yg_Fg_min1_XX"].isna()
+        df = df.with_columns(
+            pl.col("Yg_Fg_min1_XX_temp").mean().over("group_XX").alias("Yg_Fg_min1_XX")
+        )
+        df = df.with_columns(
+            pl.col("Yg_Fg_min1_XX").is_not_null().alias("feasible_het_XX")
+        )
+        df = df.drop("Yg_Fg_min1_XX_temp")
 
-        if trends_lin is not None:
-            df["Yg_Fg_min2_XX"] = np.where(
-                df["time_XX"] == df["F_g_XX"] - 2, df["outcome_non_diff_XX"], np.nan
+        if trends_lin:
+            df = df.with_columns(
+                pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 2)
+                .then(pl.col("outcome_non_diff_XX"))
+                .otherwise(None)
+                .alias("Yg_Fg_min2_XX_temp")
             )
-            df["Yg_Fg_min2_XX"] = df.groupby("group_XX")["Yg_Fg_min2_XX"].transform("mean")
-            df["Yg_Fg_min2_XX"] = df["Yg_Fg_min2_XX"].replace({np.nan: None})
-            df["feasible_het_XX"] &= ~df["Yg_Fg_min2_XX"].isna()
+            df = df.with_columns(
+                pl.col("Yg_Fg_min2_XX_temp").mean().over("group_XX").alias("Yg_Fg_min2_XX")
+            )
+            df = df.with_columns(
+                (pl.col("feasible_het_XX") & pl.col("Yg_Fg_min2_XX").is_not_null()).alias("feasible_het_XX")
+            )
+            df = df.drop("Yg_Fg_min2_XX_temp")
 
         # Order and group index
-        df = df.sort_values(["group_XX", "time_XX"])
-        df["gr_id"] = df.groupby("group_XX").cumcount() + 1
+        df = df.sort(["group_XX", "time_XX"])
+        df = df.with_columns(
+            (pl.col("time_XX").cum_count().over("group_XX")).alias("gr_id")
+        )
 
         lhyp = [f"{v}=0" for v in predict_het_good]
 
         # Loop over requested effects
         for i in all_effects_XX:
-            # Sample restriction
-            het_sample = df.loc[
-                (df["F_g_XX"] - 1 + i <= df["T_g_XX"]) & (df["feasible_het_XX"])
-            ].copy()
-
             # Yg, Fg-1 + i
-            df[f"Yg_Fg_{i}_XX"] = np.where(
-                df["time_XX"] == df["F_g_XX"] - 1 + i, df["outcome_non_diff_XX"], np.nan
+            df = df.with_columns(
+                pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1 + i)
+                .then(pl.col("outcome_non_diff_XX"))
+                .otherwise(None)
+                .alias(f"Yg_Fg_{i}_XX_temp")
             )
-            df[f"Yg_Fg_{i}_XX"] = df.groupby("group_XX")[f"Yg_Fg_{i}_XX"].transform("mean")
+            df = df.with_columns(
+                pl.col(f"Yg_Fg_{i}_XX_temp").mean().over("group_XX").alias(f"Yg_Fg_{i}_XX")
+            )
+            df = df.drop(f"Yg_Fg_{i}_XX_temp")
 
-            df["diff_het_XX"] = df[f"Yg_Fg_{i}_XX"] - df["Yg_Fg_min1_XX"]
+            # Difference calculation
+            df = df.with_columns(
+                (pl.col(f"Yg_Fg_{i}_XX") - pl.col("Yg_Fg_min1_XX")).alias("diff_het_XX")
+            )
             if trends_lin:
-                df["diff_het_XX"] -= i * (df["Yg_Fg_min1_XX"] - df["Yg_Fg_min2_XX"])
+                df = df.with_columns(
+                    (pl.col("diff_het_XX") - i * (pl.col("Yg_Fg_min1_XX") - pl.col("Yg_Fg_min2_XX"))).alias("diff_het_XX")
+                )
 
             # Interaction term
-            df[f"prod_het_{i}_XX"] = df["S_g_het_XX"] * df["diff_het_XX"]
-            df.loc[df["gr_id"] != 1, f"prod_het_{i}_XX"] = np.nan
+            df = df.with_columns(
+                pl.when(pl.col("gr_id") == 1)
+                .then(pl.col("S_g_het_XX") * pl.col("diff_het_XX"))
+                .otherwise(None)
+                .alias(f"prod_het_{i}_XX")
+            )
+
+            # Sample restriction - filter and convert to pandas for regression
+            het_sample_pl = df.filter(
+                (pl.col("F_g_XX") - 1 + i <= pl.col("T_g_XX")) & pl.col("feasible_het_XX")
+            )
+            het_sample = het_sample_pl.to_pandas().reset_index(drop=True)
 
             # Regression formula
             het_reg = f"prod_het_{i}_XX ~ {' + '.join(predict_het_good)}"
 
             # Add categorical dummies
-            for v in ["F_g_XX", "d_sq_XX", "S_g_XX", trends_nonparam]:
-                if het_sample[v].nunique() > 1:
+            cat_vars = ["F_g_XX", "d_sq_XX", "S_g_XX"]
+            if trends_nonparam is not None:
+                cat_vars.extend(trends_nonparam if isinstance(trends_nonparam, list) else [trends_nonparam])
+
+            for v in cat_vars:
+                if v in het_sample.columns and het_sample[v].nunique() > 1:
                     het_reg += f" + C({v})"
 
-            # Run regression with robust SE (HC1)
-            model = smf.wls(het_reg, data=het_sample, weights=het_sample["weight_XX"]).fit(
-                cov_type="HC1"
-            )
+            # Run regression with robust SE
+            # HC2 by default, or HC2 with cluster and dfadjust if predict_het_hc2bm
+            if predict_het_hc2bm:
+                # Bell-McCaffrey degrees of freedom adjustment with clustering
+                cluster_var = cluster if cluster else "group_XX"
+                if cluster_var in het_sample.columns:
+                    # Drop rows with missing values in regression variables to avoid mismatch
+                    # between cluster groups and statsmodels internal filtering
+                    reg_vars = [f"prod_het_{i}_XX", "weight_XX", cluster_var] + predict_het_good
+                    reg_vars = [v for v in reg_vars if v in het_sample.columns]
+                    het_sample_clean = het_sample.dropna(subset=reg_vars).reset_index(drop=True)
+
+                    # Use cluster-robust with small sample adjustment
+                    cluster_groups = het_sample_clean[cluster_var].values
+                    model = smf.wls(het_reg, data=het_sample_clean, weights=het_sample_clean["weight_XX"].values).fit(
+                        cov_type="cluster",
+                        cov_kwds={"groups": cluster_groups, "use_correction": True}
+                    )
+                else:
+                    model = smf.wls(het_reg, data=het_sample, weights=het_sample["weight_XX"].values).fit(
+                        cov_type="HC2"
+                    )
+            else:
+                model = smf.wls(het_reg, data=het_sample, weights=het_sample["weight_XX"].values).fit(
+                    cov_type="HC2"
+                )
 
             # Extract results
             coefs = model.params[predict_het_good]
@@ -3350,8 +3820,9 @@ def did_multiplegt_main(
             dict_glob["p_equality_effects"] = p_equality_effects
 
         else:
-            print(
-                "Some effects could not be estimated. Therefore, the test of equality of effects could not be computed."
+            warnings.warn(
+                "Some effects could not be estimated. Therefore, the test of equality of effects could not be computed.",
+                UserWarning
             )
 
     # assume df is a pandas DataFrame
@@ -3632,6 +4103,65 @@ def did_multiplegt_main(
 
 
     # -------------------------------------
+    # Design option: detect treatment paths
+    # -------------------------------------
+    design_output = None
+    if design is not None:
+        try:
+            from ._design import run_design_analysis
+            design_output = run_design_analysis(
+                df=df,
+                design=design,
+                l_XX=l_XX,
+                T_max_XX=T_max_XX,
+                weight_col="weight_XX" if weight else None
+            )
+        except Exception as e:
+            warnings.warn(f"Design option failed: {str(e)}", UserWarning)
+
+    # -------------------------------------
+    # Normalized weights option
+    # -------------------------------------
+    normalized_weights_output = None
+    if normalized_weights and normalized:
+        try:
+            normalized_weights_output = print_normalized_weights(
+                df=df,
+                l_XX=l_XX,
+                group_col="group_XX",
+                time_col="time_XX",
+                treatment_col="treatment_XX",
+                f_g_col="F_g_XX",
+                t_g_col="T_g_XX",
+                d_sq_col="d_sq_XX",
+                n_gt_col="N_gt_XX"
+            )
+        except Exception as e:
+            warnings.warn(f"Normalized weights option failed: {str(e)}", UserWarning)
+
+    # -------------------------------------
+    # Date first switch option
+    # -------------------------------------
+    date_first_switch_output = None
+    if date_first_switch is not None:
+        try:
+            # Add T_max_XX as a column for the date_first_switch function
+            df_with_tmax = df.with_columns(
+                pl.lit(T_max_XX).alias("T_max_XX")
+            )
+            date_first_switch_output = run_date_first_switch(
+                df=df_with_tmax,
+                date_first_switch=date_first_switch,
+                group_col="group_XX",
+                time_col="time_XX",
+                f_g_col="F_g_XX",
+                t_max_col="T_max_XX",
+                d_sq_col="d_sq_XX"
+            )
+        except Exception as e:
+            warnings.warn(f"Date first switch option failed: {str(e)}", UserWarning)
+
+    # -------------------------------------
     # Assemble return object
     # -------------------------------------
     ret = {
@@ -3649,4 +4179,13 @@ def did_multiplegt_main(
 
     ret["coef"] = coef
 
-    return( ret )
+    if design_output is not None:
+        ret["design"] = design_output
+
+    if normalized_weights_output is not None:
+        ret["normalized_weights"] = normalized_weights_output
+
+    if date_first_switch_output is not None:
+        ret["date_first_switch"] = date_first_switch_output
+
+    return ret

@@ -140,9 +140,12 @@ Estimating eight non-normalized event-study effects and three placebo effects of
 deregulations on loans volume:
 
 ```python
+import pandas as pd
+import polars as pl
+from did_multiplegt_dyn import DidMultiplegtDyn
+
 favara_imbs = pl.read_csv('https://raw.githubusercontent.com/anzonyquispe/py_did_multiplegt_dyn/main/data/favara_imbs_did_multiplegt_dyn.csv', 
                  ignore_errors = True)
-start = time.time()
 model1 = DidMultiplegtDyn(
     df=favara_imbs,
     outcome = "Dl_vloans_b",

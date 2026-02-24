@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import polars as pl
-from typing import Any, List, Union
+from typing import Any, List, Union, Iterable, Optional
 import numpy as np
-from typing import Iterable, Optional
 
 
 def _safe_div(num, den):
