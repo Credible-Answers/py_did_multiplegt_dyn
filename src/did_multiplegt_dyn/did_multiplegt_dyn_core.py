@@ -1768,6 +1768,11 @@ def did_multiplegt_dyn_core_pl(
             ])
 
             # ==== Step 1: Generate U_Gg{i}_temp_XX ====
+            # Safe division: when N_gt_control is 0, the ratio term is 0 (matches Stata behavior)
+            safe_ratio = pl.when(pl.col(col_Nctrl) != 0).then(
+                (pl.col(col_Nit_g) / pl.col(col_Nctrl)) * pl.col(col_never)
+            ).otherwise(0.0)
+
             df = df.with_columns(
                 (
                     pl.col(col_dummy)
@@ -1777,10 +1782,7 @@ def did_multiplegt_dyn_core_pl(
                         & (pl.col("time_XX") <= pl.col("T_g_XX"))
                     ).cast(pl.Int64)         # indicator as 0/1
                     * pl.col("N_gt_XX")
-                    * (
-                        pl.col(col_dist)
-                        - (pl.col(col_Nit_g) / pl.col(col_Nctrl)) * pl.col(col_never)
-                    )
+                    * (pl.col(col_dist) - safe_ratio)
                 ).alias(col_temp)
             )
 
@@ -1822,14 +1824,12 @@ def did_multiplegt_dyn_core_pl(
             )
 
             # ==== Step 6 & 7: Final computation into temp_var ====
+            # Use same safe_ratio from Step 1 (already defined above)
             df = df.with_columns(
                 (
                     pl.col(col_dummy)
                     * (pl.col("G_XX") / pl.col(col_Ni))
-                    * (
-                        pl.col(col_dist)
-                        - (pl.col(col_Nit_g) / pl.col(col_Nctrl)) * pl.col(col_never)
-                    )
+                    * (pl.col(col_dist) - safe_ratio)
                     * (
                         (pl.col("time_XX") >= (i + 1))
                         & (pl.col("time_XX") <= pl.col("T_g_XX"))
@@ -2624,10 +2624,12 @@ def did_multiplegt_dyn_core_pl(
                     E_hat_col     = f"E_hat_gt_pl_{i}_XX"
 
                     # Common pieces: (dist_to_switch - (N_t / N_gt_control) * never_change)
-                    dist_expr = (
-                        pl.col(dist_col)
-                        - (pl.col(Nt_col) / pl.col(Ngt_ctrl_col)) * pl.col(never_col)
-                    )
+                    # Safe division: when N_gt_control is 0, the ratio term is 0 (matches Stata behavior)
+                    safe_ratio_pl = pl.when(pl.col(Ngt_ctrl_col) != 0).then(
+                        (pl.col(Nt_col) / pl.col(Ngt_ctrl_col)) * pl.col(never_col)
+                    ).otherwise(0.0)
+
+                    dist_expr = pl.col(dist_col) - safe_ratio_pl
 
                     # Time window 1{ time in [i+1, T_g_XX] }
                     time_window_expr = (
