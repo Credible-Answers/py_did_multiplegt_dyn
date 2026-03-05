@@ -16,6 +16,69 @@ from .did_multiplegt_dyn_core import did_multiplegt_dyn_core_pl
 from ._utils import *
 from ._date_first_switch import run_date_first_switch
 from ._normalized_weights import print_normalized_weights
+
+
+def check_matrix_invertibility(matrix, matrix_name="matrix"):
+    """
+    Check if a variance-covariance matrix is invertible and return warnings.
+
+    Returns a tuple: (is_invertible, is_nearly_singular, warning_message)
+
+    - is_invertible: False if matrix is singular (condition number is infinite)
+    - is_nearly_singular: True if condition number > 1000
+    - warning_message: The appropriate warning message, or None
+
+    This matches Stata's logic for detecting problematic variance matrices.
+    """
+    try:
+        # Compute eigenvalues
+        eigenvalues = np.linalg.eigvalsh(matrix)
+
+        # Filter out very small eigenvalues (numerical zeros)
+        tol = 1e-10
+        nonzero_eigenvalues = eigenvalues[np.abs(eigenvalues) > tol]
+
+        if len(nonzero_eigenvalues) == 0:
+            # Matrix is essentially zero - not invertible
+            return False, True, (
+                f"The F-test is not computed because the variance of {matrix_name} is not invertible. "
+                f"This can for instance happen if you cluster standard errors and you have more "
+                f"estimators than clusters."
+            )
+
+        # Condition number = max eigenvalue / min eigenvalue
+        max_eig = np.max(np.abs(nonzero_eigenvalues))
+        min_eig = np.min(np.abs(nonzero_eigenvalues))
+
+        if min_eig < tol:
+            # Matrix is singular
+            return False, True, (
+                f"The F-test is not computed because the variance of {matrix_name} is not invertible. "
+                f"This can for instance happen if you cluster standard errors and you have more "
+                f"estimators than clusters."
+            )
+
+        condition_number = max_eig / min_eig
+
+        if condition_number > 1000:
+            # Matrix is nearly singular
+            return True, True, (
+                f"The F-test may not be reliable, because the variance of {matrix_name} is close to "
+                f"not being invertible (the ratio of its largest and smallest eigenvalues is {condition_number:.1f}, "
+                f"which is larger than 1000). This can for instance happen when you compute many estimators, "
+                f"or when your estimates are very strongly correlated. We recommend that you complement "
+                f"the F-test with a sup t-test, see FAQ section of the help file for more details."
+            )
+
+        # Matrix is fine
+        return True, False, None
+
+    except np.linalg.LinAlgError:
+        return False, True, (
+            f"The F-test is not computed because the variance of {matrix_name} is not invertible."
+        )
+
+
 # Equivalent of R's MASS::ginv (generalized inverse)
 
 def did_multiplegt_main(
@@ -3434,16 +3497,32 @@ def did_multiplegt_main(
                         didmgt_Var_Effects[i - 1, j - 1] = cov_ij
                         didmgt_Var_Effects[j - 1, i - 1] = cov_ij
 
-            # Inverse covariance matrix (pseudo-inverse if singular)
-            didmgt_Var_Effects_inv = np.linalg.pinv(didmgt_Var_Effects)
-
-            # Wald χ² statistic
-            didmgt_chi2effects = (
-                didmgt_Effects.T @ didmgt_Var_Effects_inv @ didmgt_Effects
+            # Check matrix invertibility before computing F-test
+            is_invertible, is_nearly_singular, matrix_warning = check_matrix_invertibility(
+                didmgt_Var_Effects, "effects"
             )
 
-            # p-value
-            p_jointeffects = 1 - chi2.cdf(didmgt_chi2effects[0, 0], df=l_XX)
+            if not is_invertible:
+                # Matrix is singular - cannot compute F-test
+                p_jointeffects = np.nan
+                warnings.warn(matrix_warning, UserWarning)
+                dict_glob["effects_var_warning"] = matrix_warning
+            else:
+                if is_nearly_singular:
+                    # Matrix is nearly singular - F-test may not be reliable
+                    warnings.warn(matrix_warning, UserWarning)
+                    dict_glob["effects_var_warning"] = matrix_warning
+
+                # Inverse covariance matrix (pseudo-inverse if singular)
+                didmgt_Var_Effects_inv = np.linalg.pinv(didmgt_Var_Effects)
+
+                # Wald χ² statistic
+                didmgt_chi2effects = (
+                    didmgt_Effects.T @ didmgt_Var_Effects_inv @ didmgt_Effects
+                )
+
+                # p-value
+                p_jointeffects = 1 - chi2.cdf(didmgt_chi2effects[0, 0], df=l_XX)
 
         else:
             p_jointeffects = np.nan
@@ -3549,14 +3628,30 @@ def did_multiplegt_main(
                         didmgt_Var_Placebo[i - 1, j - 1] = cov_ij
                         didmgt_Var_Placebo[j - 1, i - 1] = cov_ij
 
-            # Inverse covariance matrix (pseudo-inverse if singular)
-            didmgt_Var_Placebo_inv = Ginv(didmgt_Var_Placebo)
+            # Check matrix invertibility before computing F-test
+            is_invertible_pl, is_nearly_singular_pl, matrix_warning_pl = check_matrix_invertibility(
+                didmgt_Var_Placebo, "placebos"
+            )
 
-            # Wald χ² statistic
-            didmgt_chi2placebo = didmgt_Placebo.T @ didmgt_Var_Placebo_inv @ didmgt_Placebo
+            if not is_invertible_pl:
+                # Matrix is singular - cannot compute F-test
+                p_jointplacebo = np.nan
+                warnings.warn(matrix_warning_pl, UserWarning)
+                dict_glob["placebo_var_warning"] = matrix_warning_pl
+            else:
+                if is_nearly_singular_pl:
+                    # Matrix is nearly singular - F-test may not be reliable
+                    warnings.warn(matrix_warning_pl, UserWarning)
+                    dict_glob["placebo_var_warning"] = matrix_warning_pl
 
-            # p-value
-            p_jointplacebo = 1 - chi2.cdf(didmgt_chi2placebo[0, 0], df=l_placebo_int)
+                # Inverse covariance matrix (pseudo-inverse if singular)
+                didmgt_Var_Placebo_inv = Ginv(didmgt_Var_Placebo)
+
+                # Wald χ² statistic
+                didmgt_chi2placebo = didmgt_Placebo.T @ didmgt_Var_Placebo_inv @ didmgt_Placebo
+
+                # p-value
+                p_jointplacebo = 1 - chi2.cdf(didmgt_chi2placebo[0, 0], df=l_placebo_int)
         else:
             p_jointplacebo = np.nan
             warnings.warn(
@@ -3612,9 +3707,12 @@ def did_multiplegt_main(
 
         # Order and group index
         df = df.sort(["group_XX", "time_XX"])
-        df = df.with_columns(
-            (pl.col("time_XX").cum_count().over("group_XX")).alias("gr_id")
-        )
+
+        # Create d_sq_group_XX (numeric encoding of d_sq_XX) like Stata's egen group()
+        if "d_sq_group_XX" not in df.columns:
+            df = df.with_columns(
+                pl.col("d_sq_XX").rank("dense").over(pl.lit(1)).alias("d_sq_group_XX")
+            )
 
         lhyp = [f"{v}=0" for v in predict_het_good]
 
@@ -3632,7 +3730,7 @@ def did_multiplegt_main(
             )
             df = df.drop(f"Yg_Fg_{i}_XX_temp")
 
-            # Difference calculation
+            # Difference calculation: Yg,Fg-1+i - Yg,Fg-1
             df = df.with_columns(
                 (pl.col(f"Yg_Fg_{i}_XX") - pl.col("Yg_Fg_min1_XX")).alias("diff_het_XX")
             )
@@ -3641,56 +3739,75 @@ def did_multiplegt_main(
                     (pl.col("diff_het_XX") - i * (pl.col("Yg_Fg_min1_XX") - pl.col("Yg_Fg_min2_XX"))).alias("diff_het_XX")
                 )
 
-            # Interaction term
+            # prod_het = S_g_het_XX * diff_het_XX
             df = df.with_columns(
-                pl.when(pl.col("gr_id") == 1)
-                .then(pl.col("S_g_het_XX") * pl.col("diff_het_XX"))
+                (pl.col("S_g_het_XX") * pl.col("diff_het_XX")).alias(f"prod_het_{i}_XX")
+            )
+
+            # Keep one observation per group: set to null where switcher_tag_XX != i
+            # This matches Stata: bys group_XX: replace prod_het_`i'_XX = . if switcher_tag_XX != `i'
+            df = df.with_columns(
+                pl.when(pl.col("switcher_tag_XX") == i)
+                .then(pl.col(f"prod_het_{i}_XX"))
                 .otherwise(None)
                 .alias(f"prod_het_{i}_XX")
             )
 
             # Sample restriction - filter and convert to pandas for regression
+            # Stata: if F_g_XX-1+`i'<=T_g_XX
             het_sample_pl = df.filter(
-                (pl.col("F_g_XX") - 1 + i <= pl.col("T_g_XX")) & pl.col("feasible_het_XX")
+                (pl.col("F_g_XX") - 1 + i <= pl.col("T_g_XX")) &
+                pl.col("feasible_het_XX") &
+                pl.col(f"prod_het_{i}_XX").is_not_null()
             )
             het_sample = het_sample_pl.to_pandas().reset_index(drop=True)
 
-            # Regression formula
-            het_reg = f"prod_het_{i}_XX ~ {' + '.join(predict_het_good)}"
+            if len(het_sample) == 0:
+                continue
 
-            # Add categorical dummies
-            cat_vars = ["F_g_XX", "d_sq_XX", "S_g_XX"]
-            if trends_nonparam is not None:
-                cat_vars.extend(trends_nonparam if isinstance(trends_nonparam, list) else [trends_nonparam])
+            # Build three-way interaction formula matching Stata: F_g_XX#d_sq_group_XX#S_g_XX
+            # In statsmodels: C(F_g_XX):C(d_sq_group_XX):C(S_g_XX) for full interaction
+            if trends_nonparam is None:
+                # Stata: reg prod_het_`i'_XX `predict_het_good' F_g_XX#d_sq_group_XX#S_g_XX [aw=N_gt_XX]
+                het_reg = f"prod_het_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX)"
+            else:
+                # Stata: reg ... F_g_XX#d_sq_group_XX#S_g_XX#trends_nonparam_temp_XX
+                # trends_nonparam is a list
+                tnp_vars = trends_nonparam if isinstance(trends_nonparam, list) else [trends_nonparam]
+                # Create combined trends_nonparam grouping
+                if len(tnp_vars) == 1:
+                    het_reg = f"prod_het_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX):C({tnp_vars[0]})"
+                else:
+                    # Multiple trends_nonparam - create interaction term
+                    tnp_interaction = ":".join([f"C({v})" for v in tnp_vars])
+                    het_reg = f"prod_het_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX):{tnp_interaction}"
 
-            for v in cat_vars:
-                if v in het_sample.columns and het_sample[v].nunique() > 1:
-                    het_reg += f" + C({v})"
-
-            # Run regression with robust SE
+            # Run regression with robust SE using N_gt_XX as analytic weights (matching Stata [aw=N_gt_XX])
             # HC2 by default, or HC2 with cluster and dfadjust if predict_het_hc2bm
+            weight_col = "N_gt_XX" if "N_gt_XX" in het_sample.columns else "weight_XX"
+
             if predict_het_hc2bm:
                 # Bell-McCaffrey degrees of freedom adjustment with clustering
                 cluster_var = cluster if cluster else "group_XX"
                 if cluster_var in het_sample.columns:
                     # Drop rows with missing values in regression variables to avoid mismatch
                     # between cluster groups and statsmodels internal filtering
-                    reg_vars = [f"prod_het_{i}_XX", "weight_XX", cluster_var] + predict_het_good
+                    reg_vars = [f"prod_het_{i}_XX", weight_col, cluster_var] + predict_het_good
                     reg_vars = [v for v in reg_vars if v in het_sample.columns]
                     het_sample_clean = het_sample.dropna(subset=reg_vars).reset_index(drop=True)
 
                     # Use cluster-robust with small sample adjustment
                     cluster_groups = het_sample_clean[cluster_var].values
-                    model = smf.wls(het_reg, data=het_sample_clean, weights=het_sample_clean["weight_XX"].values).fit(
+                    model = smf.wls(het_reg, data=het_sample_clean, weights=het_sample_clean[weight_col].values).fit(
                         cov_type="cluster",
                         cov_kwds={"groups": cluster_groups, "use_correction": True}
                     )
                 else:
-                    model = smf.wls(het_reg, data=het_sample, weights=het_sample["weight_XX"].values).fit(
+                    model = smf.wls(het_reg, data=het_sample, weights=het_sample[weight_col].values).fit(
                         cov_type="HC2"
                     )
             else:
-                model = smf.wls(het_reg, data=het_sample, weights=het_sample["weight_XX"].values).fit(
+                model = smf.wls(het_reg, data=het_sample, weights=het_sample[weight_col].values).fit(
                     cov_type="HC2"
                 )
 
@@ -3728,6 +3845,136 @@ def did_multiplegt_main(
             )
 
         het_res = het_res.sort_values(["covariate", "effect"])
+
+        # ----------------------------
+        # Placebo heterogeneity analysis (matching Stata lines 3213-3337)
+        # ----------------------------
+        if l_placebo_int > 0:
+            # Determine which placebos to analyze
+            if het_effects == 'all' or het_effects == -1 or (isinstance(het_effects, (list, tuple)) and -1 in het_effects):
+                all_placebos_XX = list(range(1, l_placebo_int + 1))
+            elif isinstance(het_effects, (int, float)):
+                all_placebos_XX = [int(het_effects)] if int(het_effects) <= l_placebo_int else []
+            else:
+                all_placebos_XX = [i for i in range(1, l_placebo_int + 1) if i in het_effects]
+
+            for i in all_placebos_XX:
+                # Yg, Fg-1-i (placebo period)
+                df = df.with_columns(
+                    pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1 - i)
+                    .then(pl.col("outcome_non_diff_XX"))
+                    .otherwise(None)
+                    .alias(f"Yg_Fg_pl_{i}_XX_temp")
+                )
+                df = df.with_columns(
+                    pl.col(f"Yg_Fg_pl_{i}_XX_temp").mean().over("group_XX").alias(f"Yg_Fg_pl_{i}_XX")
+                )
+                df = df.drop(f"Yg_Fg_pl_{i}_XX_temp")
+
+                # Difference calculation: Yg,Fg-1-i - Yg,Fg-1
+                df = df.with_columns(
+                    (pl.col(f"Yg_Fg_pl_{i}_XX") - pl.col("Yg_Fg_min1_XX")).alias("diff_het_pl_XX")
+                )
+                if trends_lin:
+                    df = df.with_columns(
+                        (pl.col("diff_het_pl_XX") - i * (pl.col("Yg_Fg_min1_XX") - pl.col("Yg_Fg_min2_XX"))).alias("diff_het_pl_XX")
+                    )
+
+                # prod_het_pl = S_g_het_XX * diff_het_pl_XX
+                df = df.with_columns(
+                    (pl.col("S_g_het_XX") * pl.col("diff_het_pl_XX")).alias(f"prod_het_pl_{i}_XX")
+                )
+
+                # Keep one observation per group: set to null where switcher_tag_XX != i
+                df = df.with_columns(
+                    pl.when(pl.col("switcher_tag_XX") == i)
+                    .then(pl.col(f"prod_het_pl_{i}_XX"))
+                    .otherwise(None)
+                    .alias(f"prod_het_pl_{i}_XX")
+                )
+
+                # Sample restriction
+                het_sample_pl_pl = df.filter(
+                    (pl.col("F_g_XX") - 1 + i <= pl.col("T_g_XX")) &
+                    pl.col("feasible_het_XX") &
+                    pl.col(f"prod_het_pl_{i}_XX").is_not_null()
+                )
+                het_sample_pl_pd = het_sample_pl_pl.to_pandas().reset_index(drop=True)
+
+                if len(het_sample_pl_pd) == 0:
+                    continue
+
+                # Build regression formula
+                if trends_nonparam is None:
+                    het_reg_pl = f"prod_het_pl_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX)"
+                else:
+                    tnp_vars = trends_nonparam if isinstance(trends_nonparam, list) else [trends_nonparam]
+                    if len(tnp_vars) == 1:
+                        het_reg_pl = f"prod_het_pl_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX):C({tnp_vars[0]})"
+                    else:
+                        tnp_interaction = ":".join([f"C({v})" for v in tnp_vars])
+                        het_reg_pl = f"prod_het_pl_{i}_XX ~ {' + '.join(predict_het_good)} + C(F_g_XX):C(d_sq_group_XX):C(S_g_XX):{tnp_interaction}"
+
+                weight_col_pl = "N_gt_XX" if "N_gt_XX" in het_sample_pl_pd.columns else "weight_XX"
+
+                try:
+                    if predict_het_hc2bm:
+                        cluster_var = cluster if cluster else "group_XX"
+                        if cluster_var in het_sample_pl_pd.columns:
+                            reg_vars = [f"prod_het_pl_{i}_XX", weight_col_pl, cluster_var] + predict_het_good
+                            reg_vars = [v for v in reg_vars if v in het_sample_pl_pd.columns]
+                            het_sample_clean = het_sample_pl_pd.dropna(subset=reg_vars).reset_index(drop=True)
+                            cluster_groups = het_sample_clean[cluster_var].values
+                            model_pl = smf.wls(het_reg_pl, data=het_sample_clean, weights=het_sample_clean[weight_col_pl].values).fit(
+                                cov_type="cluster",
+                                cov_kwds={"groups": cluster_groups, "use_correction": True}
+                            )
+                        else:
+                            model_pl = smf.wls(het_reg_pl, data=het_sample_pl_pd, weights=het_sample_pl_pd[weight_col_pl].values).fit(
+                                cov_type="HC2"
+                            )
+                    else:
+                        model_pl = smf.wls(het_reg_pl, data=het_sample_pl_pd, weights=het_sample_pl_pd[weight_col_pl].values).fit(
+                            cov_type="HC2"
+                        )
+
+                    # Extract results
+                    coefs_pl = model_pl.params[predict_het_good]
+                    ses_pl = model_pl.bse[predict_het_good]
+                    ts_pl = model_pl.tvalues[predict_het_good]
+
+                    t_stat_pl = student_t.ppf(0.975, model_pl.df_resid)
+                    lb_pl = coefs_pl - t_stat_pl * ses_pl
+                    ub_pl = coefs_pl + t_stat_pl * ses_pl
+
+                    f_test_pl = model_pl.f_test(lhyp)
+                    f_stat_pl = f_test_pl.pvalue
+
+                    # Append placebo results to het_res with negative effect number to indicate placebo
+                    het_res = pd.concat(
+                        [
+                            het_res,
+                            pd.DataFrame(
+                                {
+                                    "effect": -i,  # Negative to indicate placebo
+                                    "covariate": predict_het_good,
+                                    "Estimate": coefs_pl.values,
+                                    "SE": ses_pl.values,
+                                    "t": ts_pl.values,
+                                    "LB": lb_pl.values,
+                                    "UB": ub_pl.values,
+                                    "N": [int(model_pl.nobs)] * len(predict_het_good),
+                                    "pF": [f_stat_pl] * len(predict_het_good),
+                                }
+                            ),
+                        ],
+                        ignore_index=True,
+                    )
+                except Exception:
+                    # Skip placebo if regression fails
+                    pass
+
+            het_res = het_res.sort_values(["covariate", "effect"])
 
     # ----------------------------
     # Test that all DID_l effects are equal
@@ -3811,13 +4058,29 @@ def did_multiplegt_main(
             # enforce symmetry
             didmgt_test_var = (didmgt_test_var + didmgt_test_var.T) / 2
 
-            # Wald χ² statistic
-            quad_form = didmgt_test_effects.T @ np.linalg.pinv(didmgt_test_var) @ didmgt_test_effects
-            # Robustly get a scalar even if it's 0-dim, 1x1, or shape (1,)
-            didmgt_chi2_equal_ef = np.asarray(quad_form).ravel()[0]
+            # Check matrix invertibility before computing F-test for equality
+            is_invertible_eq, is_nearly_singular_eq, matrix_warning_eq = check_matrix_invertibility(
+                didmgt_test_var, "effects (equality test)"
+            )
 
-            p_equality_effects = 1 - chi2.cdf(didmgt_chi2_equal_ef, df=l_XX - 1)
-            dict_glob["p_equality_effects"] = p_equality_effects
+            if not is_invertible_eq:
+                # Matrix is singular - cannot compute F-test
+                warnings.warn(matrix_warning_eq, UserWarning)
+                dict_glob["effects_equal_var_warning"] = matrix_warning_eq
+                dict_glob["p_equality_effects"] = np.nan
+            else:
+                if is_nearly_singular_eq:
+                    # Matrix is nearly singular - F-test may not be reliable
+                    warnings.warn(matrix_warning_eq, UserWarning)
+                    dict_glob["effects_equal_var_warning"] = matrix_warning_eq
+
+                # Wald χ² statistic
+                quad_form = didmgt_test_effects.T @ np.linalg.pinv(didmgt_test_var) @ didmgt_test_effects
+                # Robustly get a scalar even if it's 0-dim, 1x1, or shape (1,)
+                didmgt_chi2_equal_ef = np.asarray(quad_form).ravel()[0]
+
+                p_equality_effects = 1 - chi2.cdf(didmgt_chi2_equal_ef, df=l_XX - 1)
+                dict_glob["p_equality_effects"] = p_equality_effects
 
         else:
             warnings.warn(
@@ -4100,6 +4363,14 @@ def did_multiplegt_main(
     # Converting to Dict
     # -------------------------------------
     did_multiplegt_dyn = dict(zip(out_names, did_multiplegt_dyn))
+
+    # Add variance matrix warnings if they exist
+    if "effects_var_warning" in dict_glob:
+        did_multiplegt_dyn["effects_var_warning"] = dict_glob["effects_var_warning"]
+    if "placebo_var_warning" in dict_glob:
+        did_multiplegt_dyn["placebo_var_warning"] = dict_glob["placebo_var_warning"]
+    if "effects_equal_var_warning" in dict_glob:
+        did_multiplegt_dyn["effects_equal_var_warning"] = dict_glob["effects_equal_var_warning"]
 
 
     # -------------------------------------

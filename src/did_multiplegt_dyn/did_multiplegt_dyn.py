@@ -259,15 +259,34 @@ class DidMultiplegtDyn:
             # Print joint test p-values if available
             p_jointeffects = result_dyn.get("p_jointeffects", None)
             if p_jointeffects is not None:
-                print(f"Test of joint nullity of the effects: p-value = {p_jointeffects:.6f}")
+                if not np.isnan(p_jointeffects):
+                    print(f"Test of joint nullity of the effects: p-value = {p_jointeffects:.6f}")
 
             p_jointplacebo = result_dyn.get("p_jointplacebo", None)
             if p_jointplacebo is not None:
-                print(f"Test of joint nullity of the placebos: p-value = {p_jointplacebo:.6f}")
+                if not np.isnan(p_jointplacebo):
+                    print(f"Test of joint nullity of the placebos: p-value = {p_jointplacebo:.6f}")
 
             p_equality_effects = result_dyn.get("p_equality_effects", None)
             if p_equality_effects is not None:
-                print(f"Test of equality of the effects: p-value = {p_equality_effects:.6f}")
+                if not np.isnan(p_equality_effects):
+                    print(f"Test of equality of the effects: p-value = {p_equality_effects:.6f}")
+
+            # Print variance matrix warnings if present
+            effects_var_warning = result_dyn.get("effects_var_warning", None)
+            if effects_var_warning is not None:
+                print()
+                print("WARNING: " + effects_var_warning)
+
+            placebo_var_warning = result_dyn.get("placebo_var_warning", None)
+            if placebo_var_warning is not None:
+                print()
+                print("WARNING: " + placebo_var_warning)
+
+            effects_equal_var_warning = result_dyn.get("effects_equal_var_warning", None)
+            if effects_equal_var_warning is not None:
+                print()
+                print("WARNING: " + effects_equal_var_warning)
 
             # Print predict_het results if available
             if predict_het is not None and len(predict_het) > 0:
