@@ -37,6 +37,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install build
 
+      - name: Clean old builds
+        run: rm -rf dist/ build/ *.egg-info
+
       - name: Build package
         run: python -m build
 
