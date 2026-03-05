@@ -26,6 +26,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,16 +40,33 @@ jobs:
           python -m pip install build
 
       - name: Clean old builds
-        run: rm -rf dist/ build/ *.egg-info
+        run: |
+          rm -rf dist/ build/ src/*.egg-info *.egg-info
+          find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name '*.egg-info' -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build package
         run: python -m build
+
+      - name: Verify build artifacts
+        run: |
+          echo "Built packages:"
+          ls -la dist/
+          echo ""
+          echo "Package count: $(ls dist/ | wc -l)"
+          # Ensure only 2 files (wheel + sdist) are present
+          if [ $(ls dist/ | wc -l) -ne 2 ]; then
+            echo "ERROR: Expected exactly 2 files in dist/"
+            exit 1
+          fi
 
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
+          if-no-files-found: error
+          retention-days: 1
 
   publish-to-pypi:
     name: Publish to PyPI
@@ -68,6 +87,11 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
+
+      - name: Verify downloaded artifacts
+        run: |
+          echo "Downloaded packages:"
+          ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
