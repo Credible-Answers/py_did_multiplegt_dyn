@@ -17,7 +17,7 @@ This is the python version of the main Stata package [did_multiplegt_dyn](https:
 
 
 ## DidMultiplegtDyn
-Estimation in Difference-in-Difference (DID) designs with multiple groups and periods.
+Estimation in staggered first switch designs, where groups experience their first treatment change at different points in time.
 
 [Short description](#Short-description) | [Setup](#Setup) | [Syntax](#Syntax) | [Description](#Description)
 
