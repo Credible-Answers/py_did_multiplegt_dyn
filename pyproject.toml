@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py_did_multiplegt_dyn"          # name on PyPI
-version = "0.1.5"
+version = "0.1.6"
 description = "Estimation of event-study Difference-in-Difference (DID) estimators in designs with multiple groups and periods, and with a potentially non-binary treatment that may increase or decrease multiple times."
 readme = "README.md"
 requires-python = ">=3.8"
