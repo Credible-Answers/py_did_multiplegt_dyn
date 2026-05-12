@@ -301,6 +301,24 @@ def did_multiplegt_main(
             treatment: "treatment_XX",
         })
 
+        # Dense-rank time so F_g_XX - 1 + k lands on actual periods.
+        # Without this, panels with non-consecutive time (e.g. presidential election years
+        # in the Gentzkow data: 1868, 1872, 1876, ...) produce all-null dummy_treat_* and
+        # d_sq_XX, because F_g_XX-1 falls in a gap between observed periods. The main
+        # estimator does the same dense-rank below; we mirror it here for the by_path prep.
+        time_mapping_bp = (
+            df_temp.select("time_XX")
+            .unique()
+            .sort("time_XX")
+            .with_row_index("time_XX_dense_bp", offset=1)
+        )
+        df_temp = (
+            df_temp.join(time_mapping_bp, on="time_XX", how="left")
+            .drop("time_XX")
+            .rename({"time_XX_dense_bp": "time_XX"})
+            .with_columns(pl.col("time_XX").cast(pl.Float64))
+        )
+
         # Sort data
         df_temp = df_temp.sort(["group_XX", "time_XX"])
 
@@ -802,11 +820,11 @@ def did_multiplegt_main(
                 .alias(col)
             )
 
-        df1 = df.groupby(group_keys).agg(agg_exprs)
+        df1 = df.group_by(group_keys).agg(agg_exprs)
 
         # df2: sum of weights
         # df2 = grp['weight_XX'].sum().reset_index(name='weight_XX')
-        df2 = df.groupby(group_keys).agg(
+        df2 = df.group_by(group_keys).agg(
             pl.col("weight_XX").sum().alias("weight_XX")
         )
 
@@ -1918,7 +1936,7 @@ def did_multiplegt_main(
 
         # Add a row id for mapping predictions back from pandas
         if "row_id" not in df.columns:
-            df = df.with_row_count("row_id")
+            df = df.with_row_index("row_id")
 
         # 4. Loop over each baseline‐treatment level we actually residualized
         # 4. Loop over each baseline‐treatment level we actually residualized
