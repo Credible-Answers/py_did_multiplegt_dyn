@@ -2,6 +2,7 @@ import polars as pl
 import numpy as np
 import math
 import warnings
+from numbers import Integral
 from typing import Optional, Sequence, Union, Dict, Any
 import polars as pl
 
@@ -41,6 +42,8 @@ def validate_inputs(
     normalized_weights: bool = False,
     predict_het_hc2bm: bool = False,
     date_first_switch=None,
+    reset: int = 0,
+    avg_time_periods: bool = False,
 ) -> Dict[str, Any]:
     """
     Validate constructor arguments for the DID class.
@@ -109,6 +112,7 @@ def validate_inputs(
         "drop_if_d_miss_before_first_switch": drop_if_d_miss_before_first_switch,
         "normalized_weights": normalized_weights,
         "predict_het_hc2bm": predict_het_hc2bm,
+        "avg_time_periods": avg_time_periods,
     }
     for name, value in bool_params.items():
         if not isinstance(value, bool):
@@ -151,6 +155,11 @@ def validate_inputs(
 
     if not isinstance(switchers, str):
         raise TypeError("`switchers` must be a string (possibly empty)")
+
+    if isinstance(reset, bool) or not isinstance(reset, Integral):
+        raise TypeError("`reset` must be a non-negative integer")
+    if reset < 0:
+        raise ValueError("`reset` must be a non-negative integer")
 
     # we leave `continuous` and `predict_het` largely unchecked on purpose,
     # since you did not specify constraints for them.
@@ -205,6 +214,8 @@ def validate_inputs(
         normalized_weights=normalized_weights,
         predict_het_hc2bm=predict_het_hc2bm,
         date_first_switch=date_first_switch,
+        reset=int(reset),
+        avg_time_periods=avg_time_periods,
     )
 
     # # ---- User-facing summary printout ----

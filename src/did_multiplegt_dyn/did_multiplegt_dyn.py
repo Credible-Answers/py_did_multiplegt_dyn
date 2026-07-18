@@ -87,6 +87,13 @@ class DidMultiplegtDyn:
         Reports dates of first treatment changes and number of groups switching.
         Format: (by_baseline_treat, output_path) where by_baseline_treat is bool
         and output_path is "console" or a file path. Example: (False, "console")
+    reset : int, default 0
+        Start a new estimation subgroup after treatment has remained unchanged
+        for this many consecutive periods. The original group remains the
+        default clustering level.
+    avg_time_periods : bool, default False
+        Report the average number of periods over which incremental treatment
+        doses can affect the outcome, together with per-effect switcher counts.
     """
     def __init__(self,
         df,
@@ -121,7 +128,9 @@ class DidMultiplegtDyn:
         by=None,
         normalized_weights=False,
         predict_het_hc2bm=False,
-        date_first_switch=None
+        date_first_switch=None,
+        reset=0,
+        avg_time_periods=False
     ):
 
         # more_granular_demeaning automatically enables less_conservative_se
@@ -170,7 +179,9 @@ class DidMultiplegtDyn:
             by=by,
             normalized_weights=normalized_weights,
             predict_het_hc2bm=predict_het_hc2bm,
-            date_first_switch=date_first_switch
+            date_first_switch=date_first_switch,
+            reset=reset,
+            avg_time_periods=avg_time_periods
         )
 
         validated = validate_inputs( **self.args )
@@ -271,6 +282,24 @@ class DidMultiplegtDyn:
             if p_equality_effects is not None:
                 if not np.isnan(p_equality_effects):
                     print(f"Test of equality of the effects: p-value = {p_equality_effects:.6f}")
+
+            avg_period_info = result_dyn.get("avg_time_periods")
+            if avg_period_info is not None:
+                avg_cumul = avg_period_info.get("avg_cumul", np.nan)
+                if not np.isnan(avg_cumul):
+                    print(
+                        "Average number of time periods over which a treatment's "
+                        f"effect is accumulated = {avg_cumul:.6f}"
+                    )
+                else:
+                    print(
+                        "Average number of time periods over which a treatment's "
+                        "effect is accumulated = nan"
+                    )
+                print("Number of switchers per effect:")
+                for effect_name, count in avg_period_info.get("N_switch_avg", {}).items():
+                    shown_count = int(count) if float(count).is_integer() else count
+                    print(f"   {effect_name} : {shown_count}")
 
             # Print variance matrix warnings if present
             effects_var_warning = result_dyn.get("effects_var_warning", None)

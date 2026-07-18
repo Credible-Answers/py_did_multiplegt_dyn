@@ -1,16 +1,31 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "py_did_multiplegt_dyn"          # name on PyPI
-version = "0.1.6"
+version = "0.1.8"
 description = "Estimation of event-study Difference-in-Difference (DID) estimators in designs with multiple groups and periods, and with a potentially non-binary treatment that may increase or decrease multiple times."
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }          # or "BSD-3-Clause", etc.
+license = { file = "LICENSE" }
 authors = [
   { name = "Anzony Quispe", email = "anzony.quispe@gmail.com" },
+]
+keywords = ["difference-in-differences", "event-study", "causal-inference", "econometrics"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
 ]
 dependencies = [
   "numpy>=1.24",
@@ -20,11 +35,17 @@ dependencies = [
   "statsmodels>=0.12.5",
   "matplotlib>=3.5",
   "seaborn>=0.12",
+  "pyarrow>=12",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+release = ["build>=1.2", "twine>=5"]
+
 [project.urls]
-Homepage = "https://github.com/anzonyquispe/py_did_multiplegt_dyn"
-Issues = "https://github.com/anzonyquispe/py_did_multiplegt_dyn/issues"
+Homepage = "https://github.com/Credible-Answers/py_did_multiplegt_dyn"
+Repository = "https://github.com/Credible-Answers/py_did_multiplegt_dyn"
+Issues = "https://github.com/Credible-Answers/py_did_multiplegt_dyn/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

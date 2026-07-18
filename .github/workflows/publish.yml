@@ -2,10 +2,10 @@
 # Uses PyPI Trusted Publishing - no API token needed
 #
 # SETUP REQUIRED (one-time):
-# 1. Go to https://pypi.org/manage/account/publishing/
-# 2. Add a new "pending publisher" with:
-#    - PyPI Project Name: py_did_multiplegt_dyn
-#    - Owner: anzonyquispe
+# 1. Go to the existing project's Publishing settings:
+#    https://pypi.org/manage/project/py-did-multiplegt-dyn/settings/publishing/
+# 2. Add a GitHub Actions trusted publisher with:
+#    - Owner: Credible-Answers
 #    - Repository name: py_did_multiplegt_dyn
 #    - Workflow name: publish.yml
 #    - Environment name: pypi
@@ -16,17 +16,54 @@ on:
   release:
     types: [published]
 
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
+  test:
+    name: Test on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[test]"
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
   build:
     name: Build distribution
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.release.tag_name }}
           clean: true
 
       - name: Set up Python
@@ -37,7 +74,18 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build
+          python -m pip install ".[release]"
+
+      - name: Verify release tag matches package version
+        shell: bash
+        run: |
+          PACKAGE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          TAG_VERSION="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: release tag v$TAG_VERSION does not match package version $PACKAGE_VERSION"
+            exit 1
+          fi
 
       - name: Clean old builds
         run: |
@@ -47,6 +95,9 @@ jobs:
 
       - name: Build package
         run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check --strict dist/*
 
       - name: Verify build artifacts
         run: |
@@ -59,6 +110,9 @@ jobs:
             echo "ERROR: Expected exactly 2 files in dist/"
             exit 1
           fi
+          PACKAGE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          test -f "dist/py_did_multiplegt_dyn-${PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "dist/py_did_multiplegt_dyn-${PACKAGE_VERSION}.tar.gz"
 
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
