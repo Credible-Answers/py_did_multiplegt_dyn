@@ -1,0 +1,22 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments and local test dependencies
+.venv/
+venv/
+.test_deps/
+.release_deps/
+.artifact_test/
+
+# Packaging outputs
+build/
+dist/
+*.egg-info/
+
+# Tooling
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

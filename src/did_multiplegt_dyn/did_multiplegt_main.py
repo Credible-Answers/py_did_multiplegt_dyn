@@ -16,6 +16,8 @@ from .did_multiplegt_dyn_core import did_multiplegt_dyn_core_pl
 from ._utils import *
 from ._date_first_switch import run_date_first_switch
 from ._normalized_weights import print_normalized_weights
+from ._avg_time_periods import compute_avg_time_periods
+from ._reset import apply_reset
 
 
 def check_matrix_invertibility(matrix, matrix_name="matrix"):
@@ -114,7 +116,9 @@ def did_multiplegt_main(
         by=None,
         normalized_weights=False,
         predict_het_hc2bm=False,
-        date_first_switch=None
+        date_first_switch=None,
+        reset=0,
+        avg_time_periods=False
 ):
 
     import polars as pl
@@ -242,7 +246,12 @@ def did_multiplegt_main(
                 bootstrap=bootstrap,
                 by_path=None,  # Don't nest by_path in by
                 design=None,  # Don't show design for each subset
-                by=None  # No nested by
+                by=None,  # No nested by
+                normalized_weights=normalized_weights,
+                predict_het_hc2bm=predict_het_hc2bm,
+                date_first_switch=date_first_switch,
+                reset=reset,
+                avg_time_periods=avg_time_periods
             )
 
             # Add by_results metadata to indicate which subgroup this is
@@ -321,6 +330,21 @@ def did_multiplegt_main(
 
         # Sort data
         df_temp = df_temp.sort(["group_XX", "time_XX"])
+
+        # reset() must affect path construction itself (as in Stata), not be
+        # applied a second time inside each path-specific recursive estimate.
+        path_cluster = cluster
+        if reset:
+            reset_cluster_col = None if cluster in (None, group) else cluster
+            df_temp, reset_cluster_col = apply_reset(
+                df_temp,
+                reset,
+                group_col="group_XX",
+                time_col="time_XX",
+                treatment_col="treatment_XX",
+                cluster_col=reset_cluster_col,
+            )
+            path_cluster = reset_cluster_col
 
         # Create T_g (last time per group)
         df_temp = df_temp.with_columns([
@@ -532,7 +556,7 @@ def did_multiplegt_main(
                         group=group,
                         time=time,
                         treatment=treatment,
-                        cluster=cluster,
+                        cluster=path_cluster,
                         effects=path_effects,
                         placebo=path_placebos,
                         normalized=normalized,
@@ -555,7 +579,12 @@ def did_multiplegt_main(
                         bootstrap=bootstrap,
                         by_path=None,  # No nested by_path
                         design=None,
-                        by=None
+                        by=None,
+                        normalized_weights=normalized_weights,
+                        predict_het_hc2bm=predict_het_hc2bm,
+                        date_first_switch=date_first_switch,
+                        reset=0,
+                        avg_time_periods=avg_time_periods
                     )
 
                     all_path_results.append({
@@ -873,6 +902,19 @@ def did_multiplegt_main(
             pl.col(outcome).alias("outcome_XX"),
             pl.col(treatment).alias("treatment_XX")
         ])
+    )
+
+    # ``reset`` is applied after dense group/time IDs are created and before
+    # first-switch variables are built, matching the Stata command. When no
+    # coarser cluster was requested, apply_reset returns cluster_XX containing
+    # the original group ID so inference remains clustered at that level.
+    df, cluster = apply_reset(
+        df,
+        reset,
+        group_col="group_XX",
+        time_col="time_XX",
+        treatment_col="treatment_XX",
+        cluster_col=cluster,
     )
 
     import polars as pl
@@ -4299,88 +4341,76 @@ def did_multiplegt_main(
 
 
 
-    # -------------------------------------
-    # Average Time on Effects
-    # -------------------------------------
-    if not trends_lin:
-
-        # ---- FIXED LINE: no clip_max, use when/then/otherwise ----
-        expr_M = pl.col("T_g_XX") - pl.col("F_g_XX") + 1
-        df = df.with_columns(
-            pl.when(expr_M > l_XX)
-            .then(pl.lit(l_XX))
-            .otherwise(expr_M)
-            .alias("M_g_XX")
-        )
-
-        # Initialize delta_D_g_XX
-        df = df.with_columns(
-            pl.lit(None).cast(pl.Float64).alias("delta_D_g_XX")
-        )
-
-        for j in range(1, l_XX + 1):
-            plus_col = f"delta_D_g_{j}_plus_XX"
-            minus_col = f"delta_D_g_{j}_minus_XX"
-            tmp_col = f"delta_D_g_{j}_XX"
-
-            # delta_D_g_j = plus, or minus if plus==0
-            df = df.with_columns(
-                pl.when(pl.col(plus_col) == 0)
-                .then(pl.col(minus_col))
-                .otherwise(pl.col(plus_col))
-                .alias(tmp_col)
-            )
-
-            # set 0 to null
-            df = df.with_columns(
-                pl.when(pl.col(tmp_col) == 0)
-                .then(pl.lit(None))
-                .otherwise(pl.col(tmp_col))
-                .alias(tmp_col)
-            )
-
-            # delta_D_g_XX = delta_D_g_j where switcher_tag_XX == j
-            df = df.with_columns(
-                pl.when(pl.col("switcher_tag_XX") == j)
-                .then(pl.col(tmp_col))
-                .otherwise(pl.col("delta_D_g_XX"))
-                .alias("delta_D_g_XX")
-            )
-
-            df = df.drop(tmp_col)
-
-        # delta_D_g_num_XX = delta_D_g_XX * (M_g_XX - (switcher_tag_XX - 1))
-        df = df.with_columns(
-            (
-                pl.col("delta_D_g_XX")
-                * (pl.col("M_g_XX") - (pl.col("switcher_tag_XX") - 1))
-            ).alias("delta_D_g_num_XX")
-        )
-
-        delta_D_num_total_XX = df.select(
-            pl.col("delta_D_g_num_XX").sum()
-        ).item()
-
-        delta_D_denom_total_XX = df.select(
-            pl.col("delta_D_g_XX").sum()
-        ).item()
-
-        avg_periods = delta_D_num_total_XX / delta_D_denom_total_XX
-
-
-    # -------------------------------------
-    # Adding agregation of Effects
-    # -------------------------------------
-
-    if trends_lin is None:
-        did_multiplegt_dyn.append(avg_periods)
-        out_names.append("avg_period")
+    # ------------------------------------------------------------------
+    # Legacy average-period calculation (intentionally commented out).
+    # ------------------------------------------------------------------
+    # The previous Python result used the already-computed delta_D_g columns:
+    #
+    # expr_M = pl.col("T_g_XX") - pl.col("F_g_XX") + 1
+    # df = df.with_columns(
+    #     pl.when(expr_M > l_XX).then(l_XX).otherwise(expr_M).alias("M_g_XX")
+    # )
+    # df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("delta_D_g_XX"))
+    # for j in range(1, l_XX + 1):
+    #     plus_col = f"delta_D_g_{j}_plus_XX"
+    #     minus_col = f"delta_D_g_{j}_minus_XX"
+    #     tmp_col = f"delta_D_g_{j}_XX"
+    #     df = df.with_columns(
+    #         pl.when(pl.col(plus_col) == 0)
+    #         .then(pl.col(minus_col))
+    #         .otherwise(pl.col(plus_col))
+    #         .alias(tmp_col)
+    #     )
+    #     df = df.with_columns(
+    #         pl.when(pl.col(tmp_col) == 0).then(None).otherwise(pl.col(tmp_col)).alias(tmp_col)
+    #     )
+    #     df = df.with_columns(
+    #         pl.when(pl.col("switcher_tag_XX") == j)
+    #         .then(pl.col(tmp_col))
+    #         .otherwise(pl.col("delta_D_g_XX"))
+    #         .alias("delta_D_g_XX")
+    #     ).drop(tmp_col)
+    # df = df.with_columns(
+    #     (
+    #         pl.col("delta_D_g_XX")
+    #         * (pl.col("M_g_XX") - (pl.col("switcher_tag_XX") - 1))
+    #     ).alias("delta_D_g_num_XX")
+    # )
+    # avg_periods = (
+    #     df.select(pl.col("delta_D_g_num_XX").sum()).item()
+    #     / df.select(pl.col("delta_D_g_XX").sum()).item()
+    # )
+    #
+    # It was guarded by ``if trends_lin is None`` even though trends_lin is a
+    # boolean, so it was never part of the public result. The supported option
+    # below instead matches Stata's switcher-specific valid-control horizons.
 
 
     # -------------------------------------
     # Converting to Dict
     # -------------------------------------
     did_multiplegt_dyn = dict(zip(out_names, did_multiplegt_dyn))
+
+    # -------------------------------------
+    # Average time periods option
+    # -------------------------------------
+    avg_time_periods_output = None
+    if avg_time_periods:
+        try:
+            avg_time_periods_output = compute_avg_time_periods(
+                df=df,
+                l_XX=l_XX,
+                same_switchers=same_switchers,
+                switchers=switchers,
+                continuous=continuous,
+            )
+            did_multiplegt_dyn["avg_time_periods"] = avg_time_periods_output
+            did_multiplegt_dyn["avg_cumul"] = avg_time_periods_output["avg_cumul"]
+            for effect_name, count in avg_time_periods_output["N_switch_avg"].items():
+                effect_number = effect_name.rsplit("_", 1)[-1]
+                did_multiplegt_dyn[f"N_switch_avg_{effect_number}"] = count
+        except Exception as e:
+            warnings.warn(f"avg_time_periods option failed: {str(e)}", UserWarning)
 
     # Add variance matrix warnings if they exist
     if "effects_var_warning" in dict_glob:
@@ -4476,5 +4506,8 @@ def did_multiplegt_main(
 
     if date_first_switch_output is not None:
         ret["date_first_switch"] = date_first_switch_output
+
+    if avg_time_periods_output is not None:
+        ret["avg_time_periods"] = avg_time_periods_output
 
     return ret

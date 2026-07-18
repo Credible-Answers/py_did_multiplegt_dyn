@@ -11,6 +11,8 @@ import pandas as pd
 import polars as pl
 
 from did_multiplegt_dyn import DidMultiplegtDyn
+from did_multiplegt_dyn._avg_time_periods import compute_avg_time_periods
+from did_multiplegt_dyn._reset import apply_reset
 
 
 class TestBasicFunctionality:
@@ -108,6 +110,69 @@ class TestNewOptions:
 
         with pytest.warns(UserWarning, match="continuous"):
             model = DidMultiplegtDyn(df=wagepan_polars, **args)
+
+    def test_reset_and_avg_time_periods_are_accepted(self, wagepan_polars, baseline_args):
+        args = baseline_args.copy()
+        args.update(reset=2, avg_time_periods=True)
+        model = DidMultiplegtDyn(df=wagepan_polars, **args)
+
+        assert model.args["reset"] == 2
+        assert model.args["avg_time_periods"] is True
+
+    @pytest.mark.parametrize("reset", [-1, 1.5, True])
+    def test_reset_validation(self, wagepan_polars, baseline_args, reset):
+        args = baseline_args.copy()
+        args["reset"] = reset
+        with pytest.raises((TypeError, ValueError), match="reset"):
+            DidMultiplegtDyn(df=wagepan_polars, **args)
+
+    def test_reset_partitions_groups_and_keeps_original_cluster(self):
+        df = pl.DataFrame({
+            "group_XX": [1] * 5 + [2] * 5,
+            "time_XX": [1, 2, 3, 4, 5] * 2,
+            "treatment_XX": [0, 1, 1, 1, 0, 0, 0, 0, 0, 1],
+        })
+
+        reset_df, cluster_col = apply_reset(df, 2)
+
+        assert cluster_col == "cluster_XX"
+        assert reset_df["group_XX"].n_unique() == 4
+        assert reset_df.group_by("cluster_XX").agg(
+            pl.col("group_XX").n_unique().alias("n")
+        )["n"].to_list() == [2, 2]
+
+    def test_avg_time_periods_matches_stata_weighting(self):
+        df = pl.DataFrame({
+            "group_XX": [1, 1, 1, 2, 2, 2],
+            "time_XX": [1, 2, 3, 1, 2, 3],
+            "treatment_XX": [0, 1, 1, 0, 0, 0],
+            "outcome_XX": [0.0, 1.0, 2.0, 0.0, 0.0, 0.0],
+            "F_g_XX": [2, 2, 2, 4, 4, 4],
+            "T_g_XX": [3, 3, 3, 3, 3, 3],
+            "d_sq_int_XX": [1, 1, 1, 1, 1, 1],
+            "d_sq_XX": [0, 0, 0, 0, 0, 0],
+            "S_g_XX": [1, 1, 1, None, None, None],
+            "N_gt_XX": [1.0] * 6,
+        })
+
+        result = compute_avg_time_periods(df, 2)
+
+        assert result["avg_cumul"] == pytest.approx(1.5)
+        assert result["N_switch_avg"] == {"Effect_1": 1.0, "Effect_2": 1.0}
+
+    def test_reset_and_avg_time_periods_integration(self, wagepan_polars, baseline_args):
+        args = baseline_args.copy()
+        args.update(effects=2, placebo=1, reset=2, avg_time_periods=True)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fitted = DidMultiplegtDyn(df=wagepan_polars, **args).fit()
+
+        dyn = fitted.result["did_multiplegt_dyn"]
+        assert "avg_time_periods" in dyn
+        assert "avg_cumul" in dyn
+        assert "N_switch_avg_1" in dyn
+        assert "cluster_XX" in fitted.result["df"].columns
 
 
 class TestOutputFormat:

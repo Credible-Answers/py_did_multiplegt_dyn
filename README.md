@@ -5,10 +5,10 @@ This is the python version of the main Stata package [did_multiplegt_dyn](https:
 
 [![PyPI version](https://img.shields.io/pypi/v/py-did-multiplegt-dyn.svg?color=blue)](https://pypi.org/project/py-did-multiplegt-dyn/)
 [![Downloads](https://static.pepy.tech/personalized-badge/py-did-multiplegt-dyn?period=total&units=international_system&left_color=blue&right_color=grey&left_text=Downloads)](https://pepy.tech/project/py-did-multiplegt-dyn)
-[![Last commit](https://img.shields.io/github/last-commit/anzonyquispe/py_did_multiplegt_dyn.svg)](https://github.com/anzonyquispe/py_did_multiplegt_dyn/commits/main)
-[![GitHub stars](https://img.shields.io/github/stars/anzonyquispe/py_did_multiplegt_dyn.svg?style=social)](https://github.com/anzonyquispe/py_did_multiplegt_dyn/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/anzonyquispe/py_did_multiplegt_dyn.svg)](https://github.com/anzonyquispe/py_did_multiplegt_dyn/issues)
-[![License](https://img.shields.io/github/license/d2cml-ai/csdid.svg)](https://github.com/anzonyquispe/py_did_multiplegt_dyn/blob/main/LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/Credible-Answers/py_did_multiplegt_dyn.svg)](https://github.com/Credible-Answers/py_did_multiplegt_dyn/commits/main)
+[![GitHub stars](https://img.shields.io/github/stars/Credible-Answers/py_did_multiplegt_dyn.svg?style=social)](https://github.com/Credible-Answers/py_did_multiplegt_dyn/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/Credible-Answers/py_did_multiplegt_dyn.svg)](https://github.com/Credible-Answers/py_did_multiplegt_dyn/issues)
+[![License](https://img.shields.io/github/license/Credible-Answers/py_did_multiplegt_dyn.svg)](https://github.com/Credible-Answers/py_did_multiplegt_dyn/blob/main/LICENSE)
 
 
 
@@ -22,6 +22,14 @@ Estimation in staggered first switch designs, where groups experience their firs
 [Short description](#Short-description) | [Setup](#Setup) | [Syntax](#Syntax) | [Description](#Description)
 
 [Options](#Options) | [Example](#Example) | [FAQ](#FAQ) | [References](#References) | [Authors](#Authors)
+
+## What's new in 0.1.8
+
+Version 0.1.8 adds the Stata-compatible `reset` and `avg_time_periods` options.
+`reset` makes long-panel control groups reusable after a configurable treatment
+spell, while `avg_time_periods` reports how long incremental treatment effects
+can accumulate. See the [changelog](https://github.com/Credible-Answers/py_did_multiplegt_dyn/blob/main/CHANGELOG.md)
+for the complete release notes.
 
 ## Short description
 
@@ -38,7 +46,7 @@ Estimation of event-study Difference-in-Difference (DID) estimators in designs w
 
 
 ### Syntax
-**DidMultiplegtDyn** <- def(**df** = *polars*, **outcome** = *string*, **group** = *string*, **time** = *string*, **treatment** = *string*, **effects** = 1,**normalized** = False, **effects_equal** = False, **placebo** = 0, **controls** = None, **trends_nonparam** = None, **trends_lin** = False, **continuous** = 0, **weight** = None, **cluster** = None, **same_switchers** = False, **same_switchers_pl** = False, **switchers** = "", **ci_level** = 95, **graph_off** = False, **save_results** = None, **less_conservative_se** = False, **dont_drop_larger_lower** = False, **drop_if_d_miss_before_first_switch** = False)
+**DidMultiplegtDyn**(**df** = *polars*, **outcome** = *string*, **group** = *string*, **time** = *string*, **treatment** = *string*, **effects** = 1, **normalized** = False, **effects_equal** = False, **placebo** = 1, **controls** = None, **trends_nonparam** = None, **trends_lin** = False, **continuous** = 0, **weight** = None, **cluster** = None, **same_switchers** = False, **same_switchers_pl** = False, **switchers** = "", **ci_level** = 95, **save_results** = None, **less_conservative_se** = False, **more_granular_demeaning** = False, **dont_drop_larger_lower** = False, **drop_if_d_miss_before_first_switch** = False, **reset** = 0, **avg_time_periods** = False)
 
 
 ## Description
@@ -71,6 +79,8 @@ For all "switchers", namely groups that experience a change of their treatment o
 
 **placebo(**#**)**: gives the number of placebo estimators to be computed. Placebos compare the outcome evolution of switchers and of their controls, before switchers' treatment changes for the first time. Under the parallel trends and no-anticipation assumptions underlying the event-study estimators computed by did_multiplegt_dyn, the expectation of the placebos is equal to zero. Thus, placebos can be used to test those assumptions, by testing the None that all placebos are equal to zero. If the user requests that at least two placebos be estimated, the command computes the p-value of a joint test of that None hypothesis. The number of placebos requested can be at most equal to the number of time periods in the data minus 2, though most often only a smaller number of placebos can be computed. Also, the number of placebos requested cannot be larger than the number of effects requested.
 
+**reset(**#**)**: partitions every original group into a sequence of subgroups. A new subgroup starts when treatment has remained unchanged for # consecutive periods since its last change. This can restore usable controls in long panels where every original group eventually switches. The identifying restriction is that treatment lags older than # periods do not affect the outcome. The option keeps only groups whose treatment is observed for the maximum number of dates in the sample. Unless a coarser **cluster** is supplied, standard errors remain clustered at the original-group level. In Python, use `reset=#`; the default `reset=0` disables the option.
+
 **controls(***list***)**: gives the names of the control variables to be included in the estimation. Estimators with controls are similar to those without controls, except that the first-difference of the outcome is replaced by residuals from regressions of the first-difference of the outcome on the first-differences of the controls and time fixed effects. Those regressions are estimated in the sample of control $(g,t)$s: $(g,t)$s such that group $g$'s treatment has not changed yet at $t$. Those regressions are also estimated separately for each value of the baseline treatment. Estimators with controls are unbiased even if groups experience differential trends, provided such differential trends can be fully explained by a linear model in covariates changes. To control for time-invariant covariates, one needs to interact them with the time variable **T**, or with time fixed effects. See Section 1.2 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2020a) for further details.
 
 **trends_lin**: when this option is specified, the estimation of the treatment effects allows for group-specific linear trends. Estimators with linear trends start by computing event-study effects on the outcome's first-difference, rather than on the outcome itself, thus allowing for group-specific linear trends. Then, to recover event-study effect $\ell$ on the outcome, event-study effects on the outcome's first-difference are summed from 1 to $\ell$. See Section 1.3 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2024) for further details. When this option is specified, the estimated average total effect per unit of treatment is not computed.
@@ -102,6 +112,8 @@ For all "switchers", namely groups that experience a change of their treatment o
 
 **drop_if_d_miss_before_first_switch**: This option is relevant when the treatment of some groups is missing at some time periods. Then, the command imputes some of those missing treatments. Those imputations are detailed in Appendix A of de Chaisemartin et al (2024). In designs where groups' treatments can change at most once, all those imputations are justified by the design. In other designs, some of those imputations may be liberal. drop_if_d_miss_before_first_switch can be used to overrule the potentially liberal imputations that are not innocuous for the non-normalized event-study estimators. See Appendix A of de Chaisemartin et al (2024) for further details.
 
+**avg_time_periods**: reports the average number of periods over which an incremental treatment dose can affect the outcome. For every switcher, the usable horizon ends at the last period with observed outcomes and a valid not-yet-switching control group in the same baseline-treatment class. The average weights each incremental dose by the number of periods for which it can affect the outcome. The result is available as `result["did_multiplegt_dyn"]["avg_cumul"]`; per-effect switcher counts are stored as `N_switch_avg_1`, `N_switch_avg_2`, and so on. `summary()` prints both the average and those counts.
+
 **<ins>Technical note on Python output:</ins>** 
 
 The standard output of did_multiplegt_dyn in Python is a dictionary of objects with *DID* class. This allows for customized *summary* method dispatch and plot suitable for event studies. The basic output list of the program includes: (i) a list with all the results from the estimation (*results*), (ii) a matplotlib object for the event-study graph (*plot*). Additional options enrich the output list and normally add up to other items in the *results* sublist. You can inspect the attribute result of the *DID* class which is a dicctionaty with all the intermediate results, final dataset, joint placebo and effects tests.
@@ -126,7 +138,7 @@ import pandas as pd
 import polars as pl
 from did_multiplegt_dyn import DidMultiplegtDyn
 
-favara_imbs = pl.read_csv('https://raw.githubusercontent.com/anzonyquispe/py_did_multiplegt_dyn/main/data/favara_imbs_did_multiplegt_dyn.csv', 
+favara_imbs = pl.read_csv('https://raw.githubusercontent.com/Credible-Answers/py_did_multiplegt_dyn/main/data/favara_imbs_did_multiplegt_dyn.csv',
                  ignore_errors = True)
 model1 = DidMultiplegtDyn(
     df=favara_imbs,
@@ -143,6 +155,29 @@ model1 = DidMultiplegtDyn(
 )
 model1.fit()
 ```
+
+The two additional Stata-compatible options can be requested directly in the constructor:
+
+```python
+model_with_reset = DidMultiplegtDyn(
+    df=favara_imbs,
+    outcome="Dl_vloans_b",
+    group="county",
+    time="year",
+    treatment="inter_bra",
+    effects=8,
+    placebo=3,
+    reset=5,
+    avg_time_periods=True,
+)
+model_with_reset.fit()
+model_with_reset.summary()
+
+avg_cumul = model_with_reset.result["did_multiplegt_dyn"]["avg_cumul"]
+effect_1_switchers = model_with_reset.result["did_multiplegt_dyn"]["N_switch_avg_1"]
+```
+
+`reset=5` starts a new subgroup after five consecutive periods without a treatment change. `avg_time_periods=True` does not change the event-study estimates; it adds the Stata-compatible accumulation diagnostic to the returned results and summary.
 
 ```python
 model1_sum = model1.summary()

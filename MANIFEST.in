@@ -1,0 +1,6 @@
+include CHANGELOG.md
+include pytest.ini
+recursive-include tests *.py *.dta *.csv
+prune tests/notebooks
+global-exclude .DS_Store
+global-exclude *.py[cod]
