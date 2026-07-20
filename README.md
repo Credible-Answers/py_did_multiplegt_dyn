@@ -1,6 +1,6 @@
 # py_did_multiplegt_dyn
 
-This is the python version of the main Stata package [did_multiplegt_dyn](https://github.com/chaisemartinPackages/did_multiplegt_dyn/tree/main/Stata).
+This is the Python implementation of the Stata package [did_multiplegt_dyn](https://github.com/chaisemartinPackages/did_multiplegt_dyn/tree/main/Stata).
 
 
 [![PyPI version](https://img.shields.io/pypi/v/py-did-multiplegt-dyn.svg?color=blue)](https://pypi.org/project/py-did-multiplegt-dyn/)
@@ -12,16 +12,16 @@ This is the python version of the main Stata package [did_multiplegt_dyn](https:
 
 
 
-🔊🔊 **Check out [this](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5337463) new document with examples on how to implement the did_multiplegt_dyn on various, complex designs!** We provide detailed guidelines on how to address designs with (1) a binary treatment that can turn on an off, (2) a continuous absorbing treatment, (3) a discrete multivalued treatment that can increase or decrease multiple times over time, and (4) two, binary and absorbing treatments, where the second treatment always happens after the first. You can find the code and data for replicating this examples in the "Examples did_multiplegt_dyn on various designs" folder. 🔊🔊
+> See [Using did_multiplegt_dyn to Estimate Event-Study Effects in Complex Designs](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5337463) for worked examples covering non-absorbing binary treatment, continuous absorbing treatment, multivalued treatment with repeated changes, and designs with two binary absorbing treatments.
 
 
 
 ## DidMultiplegtDyn
 Estimation in staggered first switch designs, where groups experience their first treatment change at different points in time.
 
-[Short description](#Short-description) | [Setup](#Setup) | [Syntax](#Syntax) | [Description](#Description)
+[Installation](#installation) | [Syntax](#syntax) | [Description](#description)
 
-[Options](#Options) | [Example](#Example) | [FAQ](#FAQ) | [References](#References) | [Authors](#Authors)
+[Options](#options) | [Example](#example) | [FAQ](#faq) | [References](#references) | [Authors](#authors)
 
 ## What's new in 0.1.8
 
@@ -31,94 +31,158 @@ spell, while `avg_time_periods` reports how long incremental treatment effects
 can accumulate. See the [changelog](https://github.com/Credible-Answers/py_did_multiplegt_dyn/blob/main/CHANGELOG.md)
 for the complete release notes.
 
-## Short description
+## Installation
 
-Estimation of event-study Difference-in-Difference (DID) estimators in designs with multiple groups and periods, and with a potentially non-binary treatment that may increase or decrease multiple times.  
-
-
-
-## Setup
-
-### Python
-```s
-!pip install py-did-multiplegt-dyn
+```bash
+python -m pip install py-did-multiplegt-dyn
 ```
 
+The estimator currently expects `df` to be a [Polars](https://pola.rs/) `DataFrame`.
 
-### Syntax
-**DidMultiplegtDyn**(**df** = *polars*, **outcome** = *string*, **group** = *string*, **time** = *string*, **treatment** = *string*, **effects** = 1, **normalized** = False, **effects_equal** = False, **placebo** = 1, **controls** = None, **trends_nonparam** = None, **trends_lin** = False, **continuous** = 0, **weight** = None, **cluster** = None, **same_switchers** = False, **same_switchers_pl** = False, **switchers** = "", **ci_level** = 95, **save_results** = None, **less_conservative_se** = False, **more_granular_demeaning** = False, **dont_drop_larger_lower** = False, **drop_if_d_miss_before_first_switch** = False, **reset** = 0, **avg_time_periods** = False)
+## Syntax
 
+```python
+from did_multiplegt_dyn import DidMultiplegtDyn
+
+model = DidMultiplegtDyn(
+    df=df,
+    outcome="outcome_column",
+    group="group_column",
+    time="time_column",
+    treatment="treatment_column",
+    cluster=None,
+    effects=1,
+    placebo=1,
+    normalized=False,
+    effects_equal=False,
+    controls=None,
+    trends_nonparam=None,
+    trends_lin=False,
+    continuous=0,
+    weight=None,
+    predict_het=None,
+    same_switchers=False,
+    same_switchers_pl=False,
+    switchers="",
+    only_never_switchers=False,
+    ci_level=95,
+    save_results=None,
+    less_conservative_se=False,
+    more_granular_demeaning=False,
+    dont_drop_larger_lower=False,
+    drop_if_d_miss_before_first_switch=False,
+    by_path=None,
+    design=None,
+    by=None,
+    normalized_weights=False,
+    predict_het_hc2bm=False,
+    date_first_switch=None,
+    reset=0,
+    avg_time_periods=False,
+)
+
+model.fit()
+model.summary()
+model.plot()
+```
 
 ## Description
 
-**did_multiplegt_dyn** estimates the effect of a treatment on an outcome, using group-(e.g. county- or state-) level panel data. The command computes the DID event-study estimators introduced in de Chaisemartin and D'Haultfoeuille (2024). Like other recently proposed DID estimation commands (**csdid**, **didimputation**,...), **did_multiplegt_dyn** can be used with a binary and staggered (absorbing) treatment. But unlike those other commands, **did_multiplegt_dyn** can also be used with a non-binary treatment (discrete or continuous) that can increase or decrease multiple times. Lagged treatments may affect the outcome, and the current and lagged treatments may have heterogeneous effects, across space and/or over time.  The event-study estimators computed by the command rely on a no-anticipation and parallel trends assumptions. The panel may be unbalanced:  not all groups have to be observed at every period.  The data may also be at a more disaggregated level than the group level (e.g. individual-level wage data to measure the effect of a regional-level minimum-wage on individuals' wages).
+**did_multiplegt_dyn** computes the heterogeneity-robust DID event-study estimators introduced in de Chaisemartin and D'Haultfoeuille (2026). Like other recently proposed DID estimation commands (**csdid**, **didimputation**, ...), **did_multiplegt_dyn** can be used with a binary and staggered (absorbing) treatment. But unlike those other commands, **did_multiplegt_dyn** can also be used if the treatment is non-binary (discrete or continuous) and/or non-absorbing (the treatment can increase or decrease multiple times). It is applicable to any "staggered first switch design", where groups experience their first treatment change at different points in time. Lagged treatments may affect the outcome, and the current and lagged treatments may have heterogeneous effects, across space and/or over time. The event-study estimators computed by the command compare the outcome evolutions of switchers, namely units that experience a change in their treatment, and of not-yet-switchers, namely units whose treatment has not changed yet. Those estimators rely on a no-anticipation and parallel-trends assumptions, which can be partly tested by computing pre-trend estimators. The panel may be unbalanced: not all groups have to be observed at every period. The data may also be at a more disaggregated level than the group level (e.g. individual-level wage data to measure the effect of a regional-level minimum-wage on individuals' wages). See Section 8.3 of "Causal Inference with Differences-in-Differences: Credible Answers to Hard Questions" by Chaisemartin and D'Haultfoeuille for a thorough presentation of the estimators computed by the command.
 
-For all "switchers", namely groups that experience a change of their treatment over the study period, let $F_g$ denote the first time period when g's treatment changes. The command computes the non-normalized event-study estimators $DID_\ell$. $DID_1$ is the average, across all switchers, of DID estimators comparing the $F_{g-1}$ to $F_g$ outcome evolution of $g$ to that of groups with the same period-one treatment as $g$ but whose treatment has not changed yet at $F_g$. More generally, $DID_1$ is the average, across all switchers, of DID estimators comparing the $F_{g-1}$ to $F_{g-1+\ell}$ outcome evolution of $g$ to that of groups with the same period-one treatment as $g$ but whose treatment has not changed yet at $F_{g-1+\ell}$. Non-normalized event-study effects are average effects of having been exposed to a weakly higher treatment dose for $\ell$ periods, where the magnitude and timing of the incremental treatment doses can vary across groups. The command also computes the normalized event-study estimators $DID^n_\ell$, that normalize $DID_\ell$ by the average total incremental treatment dose received by switchers from $F_{g-1}$ to $F_{g-1+\ell}$ with respect to their period-one treatment. This normalization ensures that $DID^n_\ell$ estimates a weighted average of the effects of the current treatment and of its $\ell-1$ first lags on the outcome. The command also computes an estimated average total effect per unit of treatment, where "total effect" refers to the sum of the effects of a treatment increment, at the time when it takes place and at later periods, see Section 3.3 of de Chaisemartin and D'Haultfoeuille (2024) for further details. Finally, the command also computes placebo estimators, that average DIDs comparing the outcome evolution of switcher $g$ and of its control groups, from $F_{g-1}$ to $F_{g-1-\ell}$, namely before g's treatment changes for the first time. Those placebos can be used to test the parallel trends and no-anticipation assumptions under which the estimators computed by **did_multiplegt_dyn** are unbiased.
+**Y** is the outcome variable.
 
-**Y** ( **outcome**) is the outcome variable.
+**G** is the group variable, which identifies the panel's cross-sectional units (e.g.: counties, municipalities...)
 
-**G** ( **group**) is the group variable.
+**T** is the time period variable. The command assumes that the time variable is evenly spaced (for example, annual data with no years missing for all groups). However, it can also be used when some time periods are missing for all groups (for example, annual data with three consecutive years missing from the panel for all groups). See the FAQ section below for details.
 
-**T** ( **time**) is the time period variable.  The command assumes that the time variable is evenly spaced
-    (e.g.: the panel is at the yearly level, and no year is missing for all groups).  When it is not
-    (e.g.: the panel is at the yearly level, but three consecutive years are missing for all groups),
-    the command can still be used, though it requires a bit of tweaking, see FAQ section below.
+**D** is the treatment variable.
 
-**D** ( **treatment**) is the treatment variable.
-    
+### Further Detail
 
-## Options   
-**effects(**#**)**: gives the number of event-study effects to be estimated. By default, the command estimates non-normalized event-study effects. Non-normalized event-study effects are averages, across all switchers, of the effect of having received their actual rather than their period-one treatment dose, for $\ell$ periods. While non-normalized event-study effects can be interpreted as average effects of being exposed to a weakly higher treatment dose for $\ell$ periods, the magnitude and timing of the incremental treatment doses can vary across groups.
+**Non-normalized event-study estimators (default)** Intuitively, those effects compare groups' outcomes under their actual treatment path to what their outcome would have been under the status-quo path where they would have kept their period-one treatment throughout the panel. Formally, for all "switchers", namely groups that experience a change of their treatment over the study period, let $F_g$ denote the first time period when g's treatment changes. The command computes the non-normalized event-study estimators $DID_\ell$. $DID_1$ is the average, across all switchers, of DID estimators comparing the $F_{g}-1$ to $F_{g}$ outcome evolution of g to that of groups with the same period-one treatment as g but whose treatment has not changed yet at $F_{g}$. More generally, $DID_\ell$ is the average, across all switchers, of DID estimators comparing the $F_{g}-1$ to $F_{g}-1+\ell$ outcome evolution of g to that of groups with the same period-one treatment as g but whose treatment has not changed yet at $F_{g}-1+\ell$. Those estimators are unbiased for non-normalized event-study effects, which are average effects of having been exposed to a weakly higher treatment dose for $\ell$ periods. However, the magnitude and timing of the incremental treatment doses received under the actual treatment path relative to the status-quo path can vary across groups, so non-normalized effects can generally not be interpreted as effects of a one unit increase in the treatment.
 
+**Normalized event-study estimators** The command also computes the normalized event-study estimators $DID^n_\ell$, that normalize $DID_\ell$ by the average of the sum of the incremental treatment doses received by switchers under their actual path, relative to the doses they would have received under their status-quo path. This normalization ensures that $DID^n_\ell$ estimates a weighted average of the effects of the current treatment and of its $\ell-1$ first lags on the outcome. Thus, normalized effects can be interpreted as effects of a one unit increase in the treatment. While the effects of the current and lagged treatments cannot be separately estimated, the weight that $DID^n_\ell$ puts on the effect of each lag can be estimated.
 
-**normalized**: when this option is specified, the command estimates normalized event-study effects, that are equal to a weighted average of the effects of the current treatment and of its $\ell-1$ first lags on the outcome. See Sections 3.1 and 3.2 of de Chaisemartin and D'Haultfoeuille (2020a) for further details.
+**Average cumulative (total) effect per dose** The command also computes an estimated average cumulative (total) effect per unit of treatment, where "cumulative effect" refers to the sum of the effects of a treatment dose, at the time when it takes place and at later periods, see Section 3.3 of de Chaisemartin and D'Haultfoeuille (2026) for further details. The command also shows the number of time periods over which the effect of a dose is accumulated, on average across all incremental doses received by switchers over the study period. By dividing the average cumulative effect by the average number of periods across which effects are accumulated, one can get an estimator of the effect of being exposed to one more unit of treatment for one period.
 
-**normalized_weights**: the command reports the weights that normalized effect $\ell$ puts on the effect of the current treatment, on the effect of the first treatment lag, etc.
+**Placebos** The command also computes placebo estimators, that average DIDs comparing the outcome evolution of switcher g and of its control groups, from $F_{g}-1$ to $F_{g}-1-\ell$, namely before g's treatment changes for the first time. Those placebos can be used to test the parallel trends and no-anticipation assumptions under which the estimators computed by **did_multiplegt_dyn** are unbiased.
 
-**effects_equal**: when this option is specified and the user requests that at least two effects be estimated, the command performs an F-test that all effects are equal. When the **normalized** option is specified, this test can be useful to assess if the current and lagged treatments all have the same effect on the outcome or if their effects differ, see Lemma 3 of de Chaisemartin and D'Haultfoeuille (2020a).
+**Designs compatible with the command** The command can be used in staggered first switch designs, where groups experience their first treatment change at different points in time. Such designs encompass the canonical binary and absorbing treatment case. But they also encompass more complicated designs: groups may have heterogeneous treatments at period one, their treatment may change at different dates, some groups may experience increases in their treatment while other groups experience decreases, some groups may experience more than one change of their treatment, and finally some groups may experience larger treatment changes than others. The command can also be used to separately estimate the effects of several treatment variables, see references in the FAQ section. The only requirement is that not all groups experience their first treatment change at the same date.
 
-**placebo(**#**)**: gives the number of placebo estimators to be computed. Placebos compare the outcome evolution of switchers and of their controls, before switchers' treatment changes for the first time. Under the parallel trends and no-anticipation assumptions underlying the event-study estimators computed by did_multiplegt_dyn, the expectation of the placebos is equal to zero. Thus, placebos can be used to test those assumptions, by testing the None that all placebos are equal to zero. If the user requests that at least two placebos be estimated, the command computes the p-value of a joint test of that None hypothesis. The number of placebos requested can be at most equal to the number of time periods in the data minus 2, though most often only a smaller number of placebos can be computed. Also, the number of placebos requested cannot be larger than the number of effects requested.
+**Relaxing the parallel-trends assumption** The command allows for many relaxations of the parallel-trends assumption: see the **controls** option for estimators allowing for time-varying covariates, see the **trends_lin** option for estimators allowing for group-specific linear trends, and see the **trends_nonparam** option for estimators allowing to interact time fixed effects with time-invariant variables (e.g. industry×year effect with firm-level panel data).
 
-**reset(**#**)**: partitions every original group into a sequence of subgroups. A new subgroup starts when treatment has remained unchanged for # consecutive periods since its last change. This can restore usable controls in long panels where every original group eventually switches. The identifying restriction is that treatment lags older than # periods do not affect the outcome. The option keeps only groups whose treatment is observed for the maximum number of dates in the sample. Unless a coarser **cluster** is supplied, standard errors remain clustered at the original-group level. In Python, use `reset=#`; the default `reset=0` disables the option.
+## Options
 
-**controls(***list***)**: gives the names of the control variables to be included in the estimation. Estimators with controls are similar to those without controls, except that the first-difference of the outcome is replaced by residuals from regressions of the first-difference of the outcome on the first-differences of the controls and time fixed effects. Those regressions are estimated in the sample of control $(g,t)$s: $(g,t)$s such that group $g$'s treatment has not changed yet at $t$. Those regressions are also estimated separately for each value of the baseline treatment. Estimators with controls are unbiased even if groups experience differential trends, provided such differential trends can be fully explained by a linear model in covariates changes. To control for time-invariant covariates, one needs to interact them with the time variable **T**, or with time fixed effects. See Section 1.2 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2020a) for further details.
+### Main Options
 
-**trends_lin**: when this option is specified, the estimation of the treatment effects allows for group-specific linear trends. Estimators with linear trends start by computing event-study effects on the outcome's first-difference, rather than on the outcome itself, thus allowing for group-specific linear trends. Then, to recover event-study effect $\ell$ on the outcome, event-study effects on the outcome's first-difference are summed from 1 to $\ell$. See Section 1.3 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2024) for further details. When this option is specified, the estimated average total effect per unit of treatment is not computed.
+**effects = #**: gives the number of event-study effects to be estimated. With effects = 5, the command estimates event-study effects 1 through 5 periods after the first treatment change.
 
-**trends_nonparam(***list***)**: when this option is specified, the DID estimators computed by the command only compare switchers to controls whose treatment has not changed yet, with the same baseline treatment, and with the same value of the varlist. Estimators with the **trends_nonparam** option are unbiased even if groups experience differential trends, provided all groups with the same value of the varlist experience parallel trends. The vector can only include time-invariant variables, and the interaction of those variables has to be coarser than the group variable. For instance, if one works with a county $\times$ year data set and one wants to allow for state-specific trends, then one should write *trends_nonparam(state)*, where state is the state identifier. See Section 1.4 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2024) for further details.
+**normalized = True**: when this option is specified, the command estimates normalized event-study effects, that are equal to a weighted average of the effects of the current treatment and of its $\ell-1$ first lags on the outcome. See Section 3.2 of de Chaisemartin and D'Haultfoeuille (2026) for further details.
 
-**continuous(**#**)**: allows to use the command even when groups' period-one treatment is continuous, meaning that all groups have a different period-one treatment value. With a discrete period-one treatment, the command compares the outcome evolution of switchers and non-switchers with the same period-one treatment.  But with a truly continuous period-one treatment, there will be no two groups with the same period-one treatment. The command assumes that group's status-quo outcome evolution is a polynomial in their period-one treatment. The user's chosen polynomial order is the option's argument. See Section 1.10 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2024) for further details. Unlike the other variance estimators computed by the command, those computed when the continuous option is specified are not backed by a proven asymptotic normality result. Preliminary simulation evidence indicates that when the option is used with a correctly-specified polynomial order, those variance estimators are conservative. On the other hand, when the specified polynomial order is strictly larger than needed, those variance estimators can become liberal. Thus, when this option is specified, we recommend using the bootstrap for inference, by manually bootstrapping the command. At least, one should perform a robustness check where one compares the analytic variance computed by the command to a bootstrapped variance.
+**normalized_weights = True**: when this option and the **normalized** option are specified, the command reports the weights that normalized effect $\ell$ puts on the effect of the current treatment, on the effect of the first treatment lag, etc.
 
-**weight(***varlist***)**: gives the name of a variable to be used to weight the data. For instance, if one works with a district $\times$ year data set and one wants to weight the estimation by each district $\times$ year's population, one should write weight(population), where population is the population of each district $\times$ year. If the data set is at a more disaggregated level than group $\times$ time, the command aggregates it at the group $\times$ time level internally, and weights the estimation by the number of observations in each group $\times$ time cell if the weight option is not specified, or by the sum of the weights of the observations in each group $\times$ time cell if the weight option is specified.
+**placebo = #**: gives the number of placebo estimators to be computed. Placebos compare the outcome evolution of switchers and of their controls, before switchers' treatment changes for the first time. Under the parallel trends and no-anticipation assumptions underlying the event-study estimators computed by **did_multiplegt_dyn**, the expectation of the placebos is equal to zero. Thus, placebos can be used to test those assumptions, by testing the null that all placebos are equal to zero. If the user requests that at least two placebos be estimated, the command computes the p-value of a joint test of that null hypothesis. The number of placebos requested can be at most equal to the number of time periods in the data minus 2, though most often only a smaller number of placebos can be computed. Also, the number of placebos requested cannot be larger than the number of effects requested.
 
-**cluster(***varname***)**: can be used to cluster the estimators' standard errors. Only one clustering variable is allowed. A common practice in DID analysis is to cluster standard errors at the group level. Such clustering is implemented by default by the command. Standard errors can be clustered at a more aggregated level than the group level, but they cannot be clustered at a more disaggregated level.
+**reset = #**: specifies that treatment spells are reset after # consecutive periods without a treatment change. When this option is used, the command partitions each original group into a sequence of subgroups. A new subgroup starts whenever the treatment has remained unchanged for # consecutive periods since the last treatment change. For example, *reset = 5* starts a new subgroup whenever a group's treatment has not changed for five consecutive periods. Treatment changes occurring after such a reset are treated as belonging to a new treatment spell. Thus, a group that has experienced its last treatment change more than # periods ago can again be used as a control group by the command. This option can be useful in long panels where all groups eventually experience a treatment change. Without that option, treatment effects can only be estimated until there is still one group that has never experienced a treatment change, while with this option it may be possible to estimate treatment effects throughout the panel. With this option, the estimators computed by the command allow for effects of the first # treatment lags on the outcome, but they assume that older lags do not affect the outcome (instead, without this option the command allows for effects of lagged treatments up to any lag). When this option is specified, standard errors remain clustered at the level of the original groups, or at a coarser level if the user specifies a coarser clustering variable in the **cluster** option. When this option is specified, the command restricts the estimation sample to groups whose treatment is observed at all dates.
 
+**continuous = #**: allows to use the command even when groups' period-one treatment is continuous, meaning that all groups have a different period-one treatment value. With a discrete period-one treatment, the command compares the outcome evolution of switchers and non-switchers with the same period-one treatment. But with a truly continuous period-one treatment, there will be no two groups with the same period-one treatment. Then, the command assumes that groups' counterfactual outcome evolution if their treatment does not change is a polynomial in their period-one treatment. The user's chosen polynomial order is the option's argument. See Section 1.10 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2026) for further details. Unlike the other variance estimators computed by the command, those computed when the **continuous** option is specified are not backed by a proven asymptotic normality result. Preliminary simulation evidence indicates that when the option is used with a correctly-specified polynomial order, those variance estimators are conservative. On the other hand, when the specified polynomial order is strictly larger than needed, those variance estimators can become liberal. Thus, when this option is specified, we recommend using an external bootstrap procedure for inference. At least, one should perform a robustness check where one compares the analytic variance computed by the command to a bootstrapped variance. This option cannot be combined with the **design** option. This option only needs to be used when groups' period-one treatment is continuous: if all groups are initially untreated and then start receiving continuous treatment doses, using this option is unnecessary.
 
-**same_switchers**: if this option is specified and the user requests that at least two effects be estimated, the command will restrict the estimation of the event-study effects to switchers for which all effects can be estimated, to avoid compositional changes.
+**same_switchers = True**: if this option is specified and the user requests that at least two event-study effects be estimated, the command will restrict the estimation of the effects to switchers for which all effects can be estimated, to avoid compositional changes.
 
-**same_switchers_pl**: the command restricts the estimation of event-study and placebo effects to switchers for which all event-study and placebos effects can be estimated. 
+**same_switchers_pl = True**: this option can be specified when **same_switchers** is also specified. Then, the placebos are estimated only for switchers for which all the requested effects and placebos can be estimated.
 
-**switchers(***string***)**: one may be interested in estimating separately the treatment effect of switchers-in, whose average treatment after they switch is larger than their baseline treatment, and of switchers-out, whose average treatment after they switch is lower than their baseline treatment. In that case, one should run the command first with the switchers = "in" option, and then with the switchers = "out" option.
+**only_never_switchers = True**: if this option is specified, the command estimates the event-study effects using only never-switchers as control units, instead of using all not-yet-switchers (a larger control group than just never-switchers).
 
-**only_never_switchers**: if this option is specified, the command estimates the event-study effects using only never-switchers as control units.
+**avg_time_periods = True**: if this option is specified, the command reports the average number of time periods over which the effect of a treatment dose is cumulated. Each time a switcher group receives an incremental dose of treatment relative to its baseline, the effect of that dose is tracked from the period it is received until the last period for which a valid control group exists for that switcher. Groups that can be followed for longer, or that receive more doses, contribute more to this average. The result is stored in `model.result["did_multiplegt_dyn"]["avg_cumul"]`.
 
-**ci_level**: with this option you can change the level of the confidence intervals displayed in the output tables and the graphs. The default value is fixed at 95, yielding a 95% coverage.
+### Options to understand and leverage your design
 
-**less_conservative_se**: when groups' treatment can change multiple times, the standard errors reported by default by the command may be conservative. Then, less conservative standard errors can be obtained by specifying this option. See de Chaisemartin et al. (2024) for further details.
+**design = (*float*, *string*)**: this option reports switchers' period-one and subsequent treatments, thus helping the analyst understand the treatment paths whose effect is aggregated in the non-normalized event-study effects. When the number of treatment paths is low, or when there are paths shared by a reasonably large number of switchers, one may consider estimating treatment-path-specific event-study effects, using the **by_path** option. When the number of treatment paths is large, one may specify a number included between 0 and 1 in the *float* argument. Then the command reports the treatment paths common to at least (*float* × 100)% of switchers. Results can be printed in the Python console specifying `"console"` as the string argument. For example, *DidMultiplegtDyn(..., effects = 5, design = (0.5, "console"))* reports the treatment paths experienced by at least 50% of the switchers and prints the output in the Python console. Alternatively, the output can be stored in an Excel file providing a valid file path as the string argument.
 
-**bootstrap(***reps*, *seed***)**: when this option is specified, bootstraped instead of analytical standard errors are reported.  The number of bootstrap replications is the option's first argument, the *seed* is the option's second argument. The two arguments need to be separated by a comma. You always need to specify the comma, even if you leave either or both arguments blank.  In this case, the default values of both arguments are 50 replications and not setting a seed. If the **cluster** option is also requested, the bootstrap is clustered at the level requested in the cluster option.
+**by_path = #**: when this option is specified, the command estimates all the effects separately for the # most common treatment paths from $F_{g-1}$ to $F_{g-1+\ell}$, where $\ell$ is the argument inputted to the *effects* option. If you want to estimate effects separately for all treatment paths, you can input `by_path = "all"`. This option can not be combined with the **by** option. For instance, with a binary and non-absorbing treatment, it may be interesting to estimate event-study effects separately for groups experiencing a 01000... path, for groups experiencing a 011000... path, for groups experiencing a 0111000... path, etc. This analysis can shed light on whether treatment effects vary with the number of periods of exposure to treatment.
 
-**dont_drop_larger_lower**: by default, the command drops all the $(g,t)$ cells such that at $t$, group $g$ has experienced both a strictly larger and a strictly lower treatment than its baseline treatment. de Chaisemartin and D'Haultfoeuille (2020a) recommend this procedure, if you are interested in more details you can see their Section 3.1. The option **dont_drop_larger_lower** allows to overwrite this procedure and keeps $(g,t)$ cells such that at $t$, group $g$ has experienced both a strictly larger and a strictly lower treatment than its baseline treatment in the estimation sample.
+**switchers = *string***: one may be interested in estimating separately the treatment effect of switchers-in, whose treatment after they switch is larger than their period-one treatment, and of switchers-out, whose treatment after they switch is lower than their period-one treatment. In that case, one should run the command first with the **switchers = "in"** option, and then with the **switchers = "out"** option.
 
-**drop_if_d_miss_before_first_switch**: This option is relevant when the treatment of some groups is missing at some time periods. Then, the command imputes some of those missing treatments. Those imputations are detailed in Appendix A of de Chaisemartin et al (2024). In designs where groups' treatments can change at most once, all those imputations are justified by the design. In other designs, some of those imputations may be liberal. drop_if_d_miss_before_first_switch can be used to overrule the potentially liberal imputations that are not innocuous for the non-normalized event-study estimators. See Appendix A of de Chaisemartin et al (2024) for further details.
+**date_first_switch = (*by_baseline_treat*, *string*)**: the option reports the dates at which switchers experience their first treatment change, and how many groups experienced a first change at each date. The reference population are switchers for which the last event-study effect can be estimated. If `True` is specified as the first argument, separate tables are displayed for each level of the period-one treatment. Results can be printed in the Python console specifying `"console"` in the second argument. Alternatively, the output can be stored in an Excel file providing a valid file path in the second argument.
 
-**avg_time_periods**: reports the average number of periods over which an incremental treatment dose can affect the outcome. For every switcher, the usable horizon ends at the last period with observed outcomes and a valid not-yet-switching control group in the same baseline-treatment class. The average weights each incremental dose by the number of periods for which it can affect the outcome. The result is available as `result["did_multiplegt_dyn"]["avg_cumul"]`; per-effect switcher counts are stored as `N_switch_avg_1`, `N_switch_avg_2`, and so on. `summary()` prints both the average and those counts.
+### Options to relax the parallel-trends assumption
 
-**<ins>Technical note on Python output:</ins>** 
+Before describing the command's options to include covariates in the estimation, let us emphasize that there is evidence that when they choose their control variables, researchers engage in p-hacking: they choose the covariates that make their event-study estimates more significant, rather than choosing those that make the parallel-trends assumption more plausible. Thus, while DID estimators with control variables rely, in principle, on a weaker identifying assumption than DID estimators without controls, in practice they should be considered as less reliable. Accordingly, we recommend that by default, researchers do not include any control variable in their estimation. When pre-trend coefficients are precisely estimated and not significantly different from zero, there is no reason to include control variables in the estimation. On the other hand, when pre-trend estimators are smaller, less significant, and/or more precisely estimated with than without control variables, then it may make sense to include some control variables. See Section 4.1 of "Causal Inference with Differences-in-Differences: Credible Answers to Hard Questions" by Chaisemartin and D'Haultfoeuille for further details.
 
-The standard output of did_multiplegt_dyn in Python is a dictionary of objects with *DID* class. This allows for customized *summary* method dispatch and plot suitable for event studies. The basic output list of the program includes: (i) a list with all the results from the estimation (*results*), (ii) a matplotlib object for the event-study graph (*plot*). Additional options enrich the output list and normally add up to other items in the *results* sublist. You can inspect the attribute result of the *DID* class which is a dicctionaty with all the intermediate results, final dataset, joint placebo and effects tests.
+**controls = [*varlist*]**: gives the names of the control variables to be included in the estimation. Estimators with controls are similar to those without controls, except that the first-difference of the outcome is replaced by residuals from regressions of the first-difference of the outcome on the first-differences of the controls and time fixed effects. Those regressions are estimated in the sample of control $(g,t)$s: $(g,t)$s such that group g's treatment has not changed yet at t. Those regressions are also estimated separately for each value of the period-one treatment. Estimators with controls are unbiased even if groups experience differential trends, provided such differential trends can be fully explained by a linear model in covariates changes. To control for time-invariant covariates, one can for instance input the product of those covariates and of the time variable **T** into the option. See Section 1.2 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2026) for further details.
 
+**trends_lin = True**: when this option is specified, the estimation of the treatment effects allows for group-specific linear trends. Estimators with linear trends start by computing event-study effects on the outcome's first-difference, rather than on the outcome itself, thus allowing for group-specific linear trends. Then, to recover event-study effect $\ell$ on the outcome, event-study effects on the outcome's first-difference are summed from 1 to $\ell$. See Section 1.3 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2026) for further details. When this option is specified, the estimated average cumulative (total) effect per unit of treatment is not computed.
 
+**trends_nonparam = [*varlist*]**: when this option is specified, the DID estimators computed by the command only compare switchers to not-yet-switchers with the same period-one treatment and with the same value of *varlist*. Estimators with the **trends_nonparam = [*varlist*]** option are unbiased even if groups experience differential trends, provided all groups with the same value of *varlist* experience parallel trends. *varlist* can only include time-invariant variables, and the interaction of those variables has to be coarser than the group variable. For instance, if one works with a county×year data set and one wants to allow for state-specific trends, one should specify **trends_nonparam = ["state"]**, where state is the state identifier. Similarly, if one works with a firm×year data and one wants to allow for industry-specific trends, one should specify **trends_nonparam = ["industry"]**. See Section 1.4 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2026) for further details.
+
+### Options for standard errors and confidence intervals
+
+**cluster = *varname***: can be used to cluster the estimators' standard errors. Only one clustering variable is allowed. A common practice in DID analysis is to cluster standard errors at the group level. Such clustering is implemented by default by the command. Standard errors can be clustered at a more aggregated level than the group level, but they cannot be clustered at a more disaggregated level.
+
+**ci_level = #**: with this option, one can change the level of the confidence intervals shown in the output tables and on the graph. The default value is 95, thus yielding 95% level confidence intervals.
+
+**more_granular_demeaning = True**: when groups' treatment can change multiple times, the standard errors reported by default by the command may be conservative. Then, standard errors that may be less conservative when the sample size is large enough can be obtained by specifying this option. See de Chaisemartin et al. (2025) for further details.
+
+### Options to investigate heterogeneous effects
+
+**by = *varname***: when this option is specified, the command estimates all the effects separately by the levels of *varname*, a group-level and time-invariant variable. If *varname* is a binary variable for example, then the estimation is carried out once for groups with *varname*=0 and once for groups with *varname*=1. Then, the command reports on a graph event-study plots for all values of *varname*, thus allowing to assess effect heterogeneity by *varname*.
+
+**predict_het = [*varlist*, *numlist*]**: when this option is specified, the command outputs tables showing whether the group-level and time-invariant variables in *varlist* predict groups' estimated event-study effects. By default, with this option the command produces one table per event-study effect estimated, each displaying the coefficients from regressions of the group-level estimate of the event-study effect on the variables in *varlist*. This method to analyze heterogeneous treatment effects assumes that switchers' counterfactual outcome evolutions is uncorrelated with the variables in *varlist*. To placebo test this condition, the command also shows placebo regression tables, where switchers' outcome evolutions before their treatment changed is regressed on the covariates. The p-value of a test that all coefficients are equal to zero is shown below each table. If you are interested in predicting all the event-study effects estimated, you can specify `"all"` as the option's second argument, instead of *numlist*. This option cannot be specified together with **normalized** or **controls**. See Section 1.5 of the Web Appendix of de Chaisemartin and D'Haultfoeuille (2026) for further details.
+
+**predict_het_hc2bm = True**: when this option is specified with the **predict_het** option, the command computes HC2 standard errors that allow for intragroup correlation within groups defined by the variable specified in the **cluster** option. Degrees of freedom are adjusted following Bell and McCaffrey (2002) based on the variable specified in the **cluster** option. If no variable is specified in **cluster**, it will be clustered at the (g) level.
+
+**effects_equal = True**: when this option is specified, the command performs an F-test to determine whether all estimated effects are equal.
+
+### Other options
+
+**weight = *varname***: specifies the name of a variable used to weight the data. For instance, if one works with a district×year data set and one wants to weight the estimation by each district×year's population, one should specify **weight = "population"**. If the data set is at a more disaggregated level than group×time, the command aggregates it at the group×time level internally, and weights the estimation by the number of observations in each group×time cell if the weight option is not specified, or by the sum of the weights of the observations in each group×time cell if the weight option is specified.
+
+**save_results = *path***: if this option is specified, the command saves the estimators requested, their standard error, their 95% confidence interval, and the number of observations used in the estimation in a separate data set, at the location specified in *path*.
+
+**dont_drop_larger_lower = True**: by default, the command drops all the $(g,t)$ cells such that at $t$, group $g$ has experienced both a strictly larger and a strictly lower treatment than its period-one treatment. de Chaisemartin and D'Haultfoeuille (2026) show that dropping those cells is necessary to ensure that non-normalized event-study effects can be interpreted as effects of having been exposed to a weakly larger treatment for $\ell$ periods. The option **dont_drop_larger_lower** allows one to keep those cells.
+
+**drop_if_d_miss_before_first_switch = True**: This option is relevant when the treatment of some groups is missing at some time periods. Then, the command imputes some of those missing treatments. Those imputations are detailed in Appendix A of de Chaisemartin et al (2025). In designs where groups' treatments can change at most once, all those imputations are justified by the design. In other designs, some of those imputations may be liberal. **drop_if_d_miss_before_first_switch** can be used to overrule liberal imputations that are not innocuous for the non-normalized event-study estimators. See Appendix A of de Chaisemartin et al (2025) for further details.
 
 ## Example
 
@@ -351,4 +415,3 @@ Anzony Quispe, Economics Department, Sciences Po, France.
 
 **<ins>Contact:</ins>**  
 [chaisemartin.packages@gmail.com](mailto:chaisemartin.packages@gmail.com)
-
