@@ -21,8 +21,9 @@ All notable user-facing changes to `py_did_multiplegt_dyn` are documented here.
 - The older inactive Python `avg_periods` calculation is retained only as a
   commented legacy reference; the supported calculation now follows the Stata
   implementation's switcher-specific valid-control horizons.
-- The README documents both new options, their interpretation, usage, and
-  returned results.
+- The README now uses the 2026 estimator description as its authoritative
+  reference, documents the Python-supported option set, and omits options that
+  are not available through the Python estimator.
 - Release automation now tests Python 3.8 and 3.12, verifies that the GitHub
   release tag matches package metadata, validates distributions with Twine,
   and publishes only after all checks pass.
