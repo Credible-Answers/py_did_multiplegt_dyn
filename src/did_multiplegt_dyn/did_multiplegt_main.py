@@ -382,9 +382,14 @@ def did_multiplegt_main(
             (pl.col("time_XX").cum_count().over("group_XX") == 1).alias("first_obs_by_gp_XX")
         ])
 
-        # Create d_sq_XX (baseline treatment before switch)
+        # Create d_sq_XX (baseline treatment)
+        if by_path is not None:
+            # by_path: baseline = treatment at first period with non-missing treatment (as in Stata)
+            d_sq_cond = pl.col("time_XX") == pl.col("time_XX").filter(pl.col("treatment_XX").is_not_null()).min().over("group_XX")
+        else:
+            d_sq_cond = pl.col("time_XX") == pl.col("F_g_XX") - 1
         df_temp = df_temp.with_columns([
-            pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1)
+            pl.when(d_sq_cond)
             .then(pl.col("treatment_XX"))
             .otherwise(None)
             .alias("d_sq_temp")
