@@ -382,16 +382,27 @@ def did_multiplegt_main(
             (pl.col("time_XX").cum_count().over("group_XX") == 1).alias("first_obs_by_gp_XX")
         ])
 
-        # Create d_sq_XX (baseline treatment before switch)
+        # Create d_sq_XX (baseline treatment), as in Stata: the group's treatment
+        # at its first period where the treatment is not missing. Defining it as
+        # the treatment at F_g - 1 left d_sq_XX missing for groups not observed
+        # just before their first switch, which dropped them from every path's
+        # control sample (e.g. 12 counties in the Gentzkow et al. data).
         df_temp = df_temp.with_columns([
-            pl.when(pl.col("time_XX") == pl.col("F_g_XX") - 1)
+            pl.when(pl.col("treatment_XX").is_not_null() & ~pl.col("treatment_XX").cast(pl.Float64).is_nan())
+            .then(pl.col("time_XX"))
+            .otherwise(None)
+            .min().over("group_XX")
+            .alias("min_time_d_nonmiss_bp_XX")
+        ])
+        df_temp = df_temp.with_columns([
+            pl.when(pl.col("time_XX") == pl.col("min_time_d_nonmiss_bp_XX"))
             .then(pl.col("treatment_XX"))
             .otherwise(None)
             .alias("d_sq_temp")
         ])
         df_temp = df_temp.with_columns([
             pl.col("d_sq_temp").max().over("group_XX").alias("d_sq_XX")
-        ])
+        ]).drop("min_time_d_nonmiss_bp_XX")
 
         # Create dummy columns for treatment at each relative time period
         # k=0: baseline (F_g - 1), k=1: F_g, k=2: F_g+1, ..., k=l: F_g-1+l
@@ -778,8 +789,11 @@ def did_multiplegt_main(
         )
     else:
         # df['weight_XX'] = df[weight]
+        # Cast to Float64 (as Stata computes in doubles): an integer weight column
+        # (e.g. Int32 population) made the weighted counts Int32, and their sums
+        # overflowed (D11: 3,739,858,180 became -555,109,109).
         df = df.with_columns(
-            pl.col(weight).alias("weight_XX")
+            pl.col(weight).cast(pl.Float64).alias("weight_XX")
         )
 
     # df['weight_XX'] = df['weight_XX'].fillna(0)
@@ -2975,7 +2989,8 @@ def did_multiplegt_main(
         N_effect_XX = df.select(pl.col("count_global_XX").sum()).to_series()[0]
         N_effect_dwXX = df.select(pl.col("count_global_dwXX").sum()).to_series()[0]
 
-        mat_res_XX[l_XX, 6] = int(N_effect_XX)
+        # N.w is a sum of weights, not a whole number: do not truncate it
+        mat_res_XX[l_XX, 6] = float(N_effect_XX)
         mat_res_XX[l_XX, 4] = int(N_effect_dwXX)
 
     # --------------------------

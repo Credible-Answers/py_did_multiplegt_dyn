@@ -2,6 +2,24 @@
 
 All notable user-facing changes to `py_did_multiplegt_dyn` are documented here.
 
+## Unreleased
+
+### Fixed
+
+- `by_path`: the baseline treatment used to select each path's control groups
+  is now the group's treatment at its first non-missing period, as in Stata.
+  It was the treatment at `F_g - 1`, which is missing for groups not observed
+  just before their first switch, so those groups were dropped from every
+  path's control sample. This changed N and the estimates; for example, on
+  the Gentzkow et al. newspapers data with `by_path=3`, Python now reproduces
+  Stata on all three paths.
+- `weight`: the weight variable is now cast to `Float64`. With an integer
+  weight column (e.g. `Int32` population), the weighted counts could
+  overflow; the weighted count of the average total effect (`N.w` of the
+  `ATE` row) became negative.
+- `weight`: the weighted count of the average total effect (`N.w` of the
+  `ATE` row) is no longer truncated to an integer.
+
 ## 0.1.8 - 2026-07-18
 
 ### Added
